@@ -1,0 +1,71 @@
+erDiagram
+    CLIENTE ||--o{ ALUGUEL : faz
+    LOCADORA ||--o{ ALUGUEL : recebe
+    VEICULO ||--o{ ALUGUEL : utilizado
+    CATEGORIA ||--o{ VEICULO : pertence
+    FUNCIONARIO ||--o{ ALUGUEL : gerencia
+    ALUGUEL ||--o{ PAGAMENTO : possui
+
+    CLIENTE {
+        INTEGER id_cliente PK "NOT NULL"
+        VARCHAR(200) nome "NOT NULL"
+        VARCHAR(50) cpf "NOT NULL"
+        VARCHAR(50) telefone "NOT NULL"
+        VARCHAR(500) email "NOT NULL"
+    }
+
+    LOCADORA {
+        INTEGER id_locadora PK "NOT NULL"
+        VARCHAR(200) nome "NOT NULL"
+        VARCHAR(50) cnpj "NOT NULL"
+        VARCHAR(50) telefone "NOT NULL"
+        VARCHAR(500) email "NOT NULL" 
+    }
+
+    ALUGUEL {
+        INTEGER id_aluguel PK "NOT NULL"
+        DATE data_retirada "NOT NULL"
+        DATE data_devolucao_prevista "NOT NULL"
+        DATE data_devolucao_real "NULL"
+        NUMERIC(10,2) valor_total "NOT NULL"
+        VARCHAR(50) status "NOT NULL"
+        INTEGER id_cliente FK "NOT NULL"
+        INTEGER id_locadora FK "NOT NULL"
+        INTEGER id_veiculo FK "NOT NULL"
+        INTEGER id_funcionario FK "NOT NULL"
+    }
+
+    VEICULO {
+        INTEGER id_veiculo PK "NOT NULL"
+        VARCHAR(20) placa "NOT NULL"
+        VARCHAR(100) marca "NOT NULL"
+        VARCHAR(100) modelo "NOT NULL"
+        INTEGER ano "NOT NULL"
+        NUMERIC(10,2) valor_diaria "NOT NULL"
+        INTEGER id_categoria FK "NOT NULL"
+    }
+
+    CATEGORIA {
+        INTEGER id_categoria PK "NOT NULL"
+        VARCHAR(100) nome "NOT NULL"
+        TEXT descricao "NOT NULL"
+    }
+
+    FUNCIONARIO {
+        INTEGER id_funcionario PK "NOT NULL"
+        VARCHAR(200) email "NOT NULL"
+        VARCHAR(255) senha "NOT NULL"
+        VARCHAR(200) nome "NOT NULL"
+        VARCHAR(50) cpf "NOT NULL"
+        VARCHAR(50) telefone "NOT NULL"
+        VARCHAR(100) cargo "NOT NULL"
+    }
+
+    PAGAMENTO {
+        INTEGER id_pagamento PK "NOT NULL"
+        NUMERIC(10,2) valor "NOT NULL"
+        DATE data_pagamento "NOT NULL"
+        VARCHAR(50) metodo "NOT NULL"
+        VARCHAR(50) status "NOT NULL"
+        INTEGER id_aluguel FK "NOT NULL"
+    }
