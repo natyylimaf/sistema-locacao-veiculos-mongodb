@@ -1,63 +1,82 @@
+from decimal import Decimal
+from bson.decimal128 import Decimal128
+from pymongo import ASCENDING, DESCENDING
 from model.veiculo import Veiculo
 from model.categoria import Categoria
-from conexion.postgres_queries import PostgresQueries
-from reports.relatorios import Relatorio
+from conexion.mongo_queries import MongoQueries
 
 
 class Controller_Veiculo:
-    """Controlador CRUD de Veiculo conforme a tabela VEICULO do PostgreSQL."""
+    """Controlador CRUD de Veiculo migrado para MongoDB."""
 
     @staticmethod
-    def _from_row(row):
-        if row is None:
+    def _to_float(valor) -> float:
+        if isinstance(valor, Decimal128):
+            return float(valor.to_decimal())
+        return float(valor)
+
+    @staticmethod
+    def _to_decimal128(valor: float) -> Decimal128:
+        return Decimal128(Decimal(f"{valor:.2f}"))
+
+    @staticmethod
+    def _exibir_categorias(mongo: MongoQueries):
+        categorias = list(mongo.db["categoria"].find().sort("id_categoria", ASCENDING))
+        print("\nCategorias disponíveis:")
+        for cat in categorias:
+            print(f"  [{cat['id_categoria']}] {cat['nome']} - {cat.get('descricao', '')}")
+
+    def _from_doc(self, mongo: MongoQueries, doc: dict):
+        if doc is None:
             return None
-        categoria = Categoria(
-            row["id_categoria"],
-            row["nome_categoria"],
-            row["descricao_categoria"],
-        )
-        # A ordem segue exatamente o construtor de model.veiculo.Veiculo.
+
+        cat_doc = mongo.db["categoria"].find_one({"id_categoria": doc["id_categoria"]})
+        if cat_doc:
+            categoria = Categoria(
+                cat_doc["id_categoria"],
+                cat_doc["nome"],
+                cat_doc["descricao"],
+            )
+        else:
+            categoria = Categoria(doc["id_categoria"], "Desconhecida", "")
+
         return Veiculo(
-            row["id_veiculo"], categoria, row["placa"], row["marca"],
-            row["modelo"], row["ano"], row["valor_diaria"]
+            doc["id_veiculo"],
+            categoria,
+            doc["placa"],
+            doc["marca"],
+            doc["modelo"],
+            doc["ano"],
+            self._to_float(doc["valor_diaria"]),
         )
 
-    @staticmethod
-    def _select_base():
-        return (
-            "SELECT v.id_veiculo, v.id_categoria, v.placa, v.marca, v.modelo, "
-            "v.ano, v.valor_diaria, c.nome AS nome_categoria, "
-            "c.descricao AS descricao_categoria "
-            "FROM veiculo v JOIN categoria c ON c.id_categoria = v.id_categoria "
-        )
+    def _proximo_id(self, mongo: MongoQueries) -> int:
+        ultimo = mongo.db["veiculo"].find_one(sort=[("id_veiculo", DESCENDING)])
+        return (ultimo["id_veiculo"] + 1) if ultimo and "id_veiculo" in ultimo else 1
 
-    def verifica_existencia_veiculo(self, db: PostgresQueries, id_veiculo: int) -> bool:
-        return db.fetch_one(
-            "SELECT id_veiculo FROM veiculo WHERE id_veiculo = %s", (id_veiculo,)
-        ) is not None
+    def verifica_existencia_veiculo(self, mongo: MongoQueries, id_veiculo: int) -> bool:
+        return mongo.db["veiculo"].find_one({"id_veiculo": id_veiculo}) is not None
 
-    def verifica_existencia_categoria(self, db: PostgresQueries, id_categoria: int) -> bool:
-        return db.fetch_one(
-            "SELECT id_categoria FROM categoria WHERE id_categoria = %s", (id_categoria,)
-        ) is not None
+    def verifica_existencia_categoria(self, mongo: MongoQueries, id_categoria: int) -> bool:
+        return mongo.db["categoria"].find_one({"id_categoria": id_categoria}) is not None
 
     def consultar_veiculo(self, id_veiculo: int):
-        db = PostgresQueries()
+        mongo = MongoQueries()
         try:
-            row = db.fetch_one(
-                self._select_base() + " WHERE v.id_veiculo = %s", (id_veiculo,)
-            )
-            return self._from_row(row)
+            mongo.connect()
+            doc = mongo.db["veiculo"].find_one({"id_veiculo": id_veiculo})
+            return self._from_doc(mongo, doc)
         finally:
-            db.close()
+            mongo.close()
 
     def listar_veiculos(self):
-        db = PostgresQueries()
+        mongo = MongoQueries()
         try:
-            rows = db.fetch_all(self._select_base() + " ORDER BY v.id_veiculo")
-            return [self._from_row(row) for row in rows]
+            mongo.connect()
+            docs = mongo.db["veiculo"].find().sort("id_veiculo", ASCENDING)
+            return [self._from_doc(mongo, doc) for doc in docs]
         finally:
-            db.close()
+            mongo.close()
 
     def inserir_veiculo(self) -> Veiculo:
         placa = input("Placa: ").strip().upper()
@@ -70,14 +89,6 @@ class Controller_Veiculo:
             print("Ano e valor da diária devem ser numéricos.")
             return None
 
-        Relatorio().get_relatorio_categorias(pausar=False)
-
-        try:
-            id_categoria = int(input("\nID da categoria: ").strip())
-        except ValueError:
-            print("O ID da categoria deve ser numérico.")
-            return None
-
         if not all((placa, marca, modelo)):
             print("Placa, marca e modelo são obrigatórios.")
             return None
@@ -88,26 +99,43 @@ class Controller_Veiculo:
             print("O valor da diária deve ser maior que zero.")
             return None
 
-        db = PostgresQueries()
+        mongo = MongoQueries()
         try:
-            if db.fetch_one("SELECT id_veiculo FROM veiculo WHERE placa = %s", (placa,)):
+            mongo.connect()
+
+            self._exibir_categorias(mongo)
+
+            try:
+                id_categoria = int(input("\nID da categoria: ").strip())
+            except ValueError:
+                print("O ID da categoria deve ser numérico.")
+                return None
+
+            if mongo.db["veiculo"].find_one({"placa": placa}):
                 print(f"A placa {placa} já está cadastrada.")
                 return None
-            if not self.verifica_existencia_categoria(db, id_categoria):
+            if not self.verifica_existencia_categoria(mongo, id_categoria):
                 print(f"A categoria {id_categoria} não existe.")
                 return None
 
-            row = db.execute(
-                "INSERT INTO veiculo (id_categoria, placa, marca, modelo, ano, valor_diaria) "
-                "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id_veiculo",
-                (id_categoria, placa, marca, modelo, ano, valor_diaria), returning=True,
-            )
-            veiculo = self.consultar_veiculo(row["id_veiculo"])
+            novo_id = self._proximo_id(mongo)
+            novo_doc = {
+                "id_veiculo": novo_id,
+                "id_categoria": id_categoria,
+                "placa": placa,
+                "marca": marca,
+                "modelo": modelo,
+                "ano": ano,
+                "valor_diaria": self._to_decimal128(valor_diaria),
+            }
+
+            mongo.db["veiculo"].insert_one(novo_doc)
+            veiculo = self._from_doc(mongo, novo_doc)
             print("Veículo cadastrado com sucesso!")
             print(veiculo.to_string())
             return veiculo
         finally:
-            db.close()
+            mongo.close()
 
     def atualizar_veiculo(self) -> Veiculo:
         try:
@@ -116,9 +144,11 @@ class Controller_Veiculo:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
+        mongo = MongoQueries()
         try:
-            if not self.verifica_existencia_veiculo(db, id_veiculo):
+            mongo.connect()
+
+            if not self.verifica_existencia_veiculo(mongo, id_veiculo):
                 print(f"O veículo {id_veiculo} não existe.")
                 return None
 
@@ -132,7 +162,7 @@ class Controller_Veiculo:
                 print("Ano e valor da diária devem ser numéricos.")
                 return None
 
-            Relatorio().get_relatorio_categorias(pausar=False)
+            self._exibir_categorias(mongo)
 
             try:
                 id_categoria = int(input("\nNovo ID da categoria: ").strip())
@@ -146,29 +176,36 @@ class Controller_Veiculo:
             if not 1950 <= ano <= 2100 or valor_diaria <= 0:
                 print("Confira o ano (1950–2100) e o valor da diária (maior que zero).")
                 return None
-            if db.fetch_one(
-                "SELECT id_veiculo FROM veiculo WHERE placa = %s AND id_veiculo <> %s",
-                (placa, id_veiculo),
+            if mongo.db["veiculo"].find_one(
+                {"placa": placa, "id_veiculo": {"$ne": id_veiculo}}
             ):
                 print(f"A placa {placa} já pertence a outro veículo.")
                 return None
-            if not self.verifica_existencia_categoria(db, id_categoria):
+            if not self.verifica_existencia_categoria(mongo, id_categoria):
                 print(f"A categoria {id_categoria} não existe.")
                 return None
 
-            db.execute(
-                "UPDATE veiculo SET id_categoria = %s, placa = %s, marca = %s, "
-                "modelo = %s, ano = %s, valor_diaria = %s WHERE id_veiculo = %s",
-                (id_categoria, placa, marca, modelo, ano, valor_diaria, id_veiculo),
+            mongo.db["veiculo"].update_one(
+                {"id_veiculo": id_veiculo},
+                {
+                    "$set": {
+                        "id_categoria": id_categoria,
+                        "placa": placa,
+                        "marca": marca,
+                        "modelo": modelo,
+                        "ano": ano,
+                        "valor_diaria": self._to_decimal128(valor_diaria),
+                    }
+                },
             )
+
+            doc_atualizado = mongo.db["veiculo"].find_one({"id_veiculo": id_veiculo})
+            veiculo = self._from_doc(mongo, doc_atualizado)
+            print("Veículo atualizado com sucesso!")
+            print(veiculo.to_string())
+            return veiculo
         finally:
-            db.close()
-
-        veiculo = self.consultar_veiculo(id_veiculo)
-        print("Veículo atualizado com sucesso!")
-        print(veiculo.to_string())
-        return veiculo
-
+            mongo.close()
 
     def excluir_veiculo(self):
         try:
@@ -179,18 +216,16 @@ class Controller_Veiculo:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
+        mongo = MongoQueries()
         try:
-            row = db.fetch_one(
-                self._select_base() + " WHERE v.id_veiculo = %s",
-                (id_veiculo,),
-            )
+            mongo.connect()
 
-            if row is None:
+            doc = mongo.db["veiculo"].find_one({"id_veiculo": id_veiculo})
+            if doc is None:
                 print(f"O veículo {id_veiculo} não existe.")
                 return None
 
-            veiculo = self._from_row(row)
+            veiculo = self._from_doc(mongo, doc)
 
             print("\nVeículo selecionado:")
             print(veiculo.to_string())
@@ -203,23 +238,20 @@ class Controller_Veiculo:
                 print("Exclusão cancelada.")
                 return None
 
-            db.execute(
-                "DELETE FROM veiculo WHERE id_veiculo = %s",
-                (id_veiculo,),
-            )
+            if mongo.db["aluguel"].find_one({"id_veiculo": id_veiculo}):
+                print(
+                    "Não é possível excluir este veículo, "
+                    "pois existem aluguéis vinculados a ele."
+                )
+                return None
+
+            mongo.db["veiculo"].delete_one({"id_veiculo": id_veiculo})
 
             print("Veículo excluído com sucesso!")
             return veiculo
 
         except Exception as erro:
-            if "fk_aluguel_veiculo" in str(erro):
-                print(
-                    "Não é possível excluir este veículo, "
-                    "pois existem aluguéis vinculados a ele."
-                )
-            else:
-                print(f"Não foi possível excluir o veículo: {erro}")
+            print(f"Não foi possível excluir o veículo: {erro}")
             return None
         finally:
-            db.close()
-
+            mongo.close()

@@ -1,37 +1,67 @@
+import re
+from pymongo import DESCENDING
 from model.funcionario import Funcionario
-from conexion.postgres_queries import PostgresQueries
+from conexion.mongo_queries import MongoQueries
 from controller.validacao_cpf import ler_cpf
 
+
 class Controller_Funcionario:
-    """Controlador CRUD conforme as colunas da tabela FUNCIONARIO."""
+    """Controlador CRUD de Funcionario migrado para MongoDB."""
 
     @staticmethod
-    def _from_row(row):
-        if row is None:
+    def _from_doc(doc: dict):
+        if doc is None:
             return None
         # A ordem dos argumentos corresponde ao construtor do model Funcionario:
         # id, email, senha, nome, cpf, telefone, cargo.
         return Funcionario(
-            row["id_funcionario"], row["email"], row.get("senha"), row["nome"],
-            row["cpf"], row["telefone"], row["cargo"]
+            doc["id_funcionario"],
+            doc["email"],
+            doc.get("senha"),
+            doc["nome"],
+            doc["cpf"],
+            doc["telefone"],
+            doc["cargo"],
         )
 
-    def verifica_existencia_funcionario(self, db: PostgresQueries, id_funcionario: int) -> bool:
-        return db.fetch_one(
-            "SELECT id_funcionario FROM funcionario WHERE id_funcionario = %s",
-            (id_funcionario,),
-        ) is not None
+    @staticmethod
+    def _somente_digitos(valor: str) -> str:
+        return re.sub(r"\D", "", valor or "")
+
+    @classmethod
+    def _cpf_ja_cadastrado(
+        cls, mongo: MongoQueries, cpf_limpo: str, ignorar_id: int = None
+    ) -> bool:
+        cpf_formatado = (
+            f"{cpf_limpo[:3]}.{cpf_limpo[3:6]}.{cpf_limpo[6:9]}-{cpf_limpo[9:]}"
+            if len(cpf_limpo) == 11
+            else cpf_limpo
+        )
+        filtro = {"cpf": {"$in": [cpf_limpo, cpf_formatado]}}
+        if ignorar_id is not None:
+            filtro["id_funcionario"] = {"$ne": ignorar_id}
+        return mongo.db["funcionario"].find_one(filtro) is not None
+
+    def _proximo_id(self, mongo: MongoQueries) -> int:
+        ultimo = mongo.db["funcionario"].find_one(sort=[("id_funcionario", DESCENDING)])
+        return (ultimo["id_funcionario"] + 1) if ultimo and "id_funcionario" in ultimo else 1
+
+    def verifica_existencia_funcionario(
+        self, mongo: MongoQueries, id_funcionario: int
+    ) -> bool:
+        return (
+            mongo.db["funcionario"].find_one({"id_funcionario": id_funcionario})
+            is not None
+        )
 
     def consultar_funcionario(self, id_funcionario: int):
-        db = PostgresQueries()
+        mongo = MongoQueries()
         try:
-            row = db.fetch_one(
-                "SELECT id_funcionario, email, senha, nome, cpf, telefone, cargo "
-                "FROM funcionario WHERE id_funcionario = %s", (id_funcionario,)
-            )
-            return self._from_row(row)
+            mongo.connect()
+            doc = mongo.db["funcionario"].find_one({"id_funcionario": id_funcionario})
+            return self._from_doc(doc)
         finally:
-            db.close()
+            mongo.close()
 
     def inserir_funcionario(self) -> Funcionario:
         nome = input("Nome: ").strip()
@@ -40,32 +70,43 @@ class Controller_Funcionario:
         email = input("E-mail: ").strip()
         senha = input("Senha: ").strip()
         cargo = input("Cargo: ").strip()
+
         if not all((nome, cpf, telefone, email, senha, cargo)):
             print("Todos os campos são obrigatórios.")
             return None
 
-        db = PostgresQueries()
+        cpf_limpo = self._somente_digitos(cpf)
+
+        mongo = MongoQueries()
         try:
-            if db.fetch_one("SELECT id_funcionario FROM funcionario "
-                "WHERE regexp_replace(cpf, '[^0-9]', '', 'g') = %s", (cpf,)):
+            mongo.connect()
+
+            if self._cpf_ja_cadastrado(mongo, cpf_limpo):
                 print(f"O CPF {cpf} já está cadastrado.")
                 return None
-            if db.fetch_one("SELECT id_funcionario FROM funcionario WHERE email = %s", (email,)):
+
+            if mongo.db["funcionario"].find_one({"email": email}):
                 print(f"O e-mail {email} já está cadastrado.")
                 return None
-            row = db.execute(
-                "INSERT INTO funcionario (email, senha, nome, cpf, telefone, cargo) "
-                "VALUES (%s, %s, %s, %s, %s, %s) "
-                "RETURNING id_funcionario, email, senha, nome, cpf, telefone, cargo",
-                (email, senha, nome, cpf, telefone, cargo), returning=True,
-            )
-            funcionario = self._from_row(row)
+
+            novo_id = self._proximo_id(mongo)
+            novo_doc = {
+                "id_funcionario": novo_id,
+                "email": email,
+                "senha": senha,
+                "nome": nome,
+                "cpf": cpf_limpo,
+                "telefone": telefone,
+                "cargo": cargo,
+            }
+
+            mongo.db["funcionario"].insert_one(novo_doc)
+            funcionario = self._from_doc(novo_doc)
             print("Funcionário cadastrado com sucesso!")
             print(funcionario.to_string())
             return funcionario
         finally:
-            db.close()
-
+            mongo.close()
 
     def atualizar_funcionario(self) -> Funcionario:
         try:
@@ -76,9 +117,11 @@ class Controller_Funcionario:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
+        mongo = MongoQueries()
         try:
-            if not self.verifica_existencia_funcionario(db, id_funcionario):
+            mongo.connect()
+
+            if not self.verifica_existencia_funcionario(mongo, id_funcionario):
                 print(f"O funcionário {id_funcionario} não existe.")
                 return None
 
@@ -95,47 +138,42 @@ class Controller_Funcionario:
                 print("Nome, CPF, telefone, e-mail e cargo são obrigatórios.")
                 return None
 
-            cpf_em_uso = db.fetch_one(
-                "SELECT id_funcionario FROM funcionario "
-                "WHERE regexp_replace(cpf, '[^0-9]', '', 'g') = %s "
-                "AND id_funcionario <> %s",
-                (cpf, id_funcionario),
-            )
-            if cpf_em_uso:
+            cpf_limpo = self._somente_digitos(cpf)
+
+            if self._cpf_ja_cadastrado(mongo, cpf_limpo, ignorar_id=id_funcionario):
                 print(f"O CPF {cpf} já pertence a outro funcionário.")
                 return None
 
-            email_em_uso = db.fetch_one(
-                "SELECT id_funcionario FROM funcionario "
-                "WHERE email = %s AND id_funcionario <> %s",
-                (email, id_funcionario),
-            )
-            if email_em_uso:
+            if mongo.db["funcionario"].find_one(
+                {"email": email, "id_funcionario": {"$ne": id_funcionario}}
+            ):
                 print(f"O e-mail {email} já pertence a outro funcionário.")
                 return None
 
+            campos_atualizados = {
+                "email": email,
+                "nome": nome,
+                "cpf": cpf_limpo,
+                "telefone": telefone,
+                "cargo": cargo,
+            }
             if senha:
-                db.execute(
-                    "UPDATE funcionario SET email = %s, senha = %s, "
-                    "nome = %s, cpf = %s, telefone = %s, cargo = %s "
-                    "WHERE id_funcionario = %s",
-                    (email, senha, nome, cpf, telefone, cargo, id_funcionario),
-                )
-            else:
-                db.execute(
-                    "UPDATE funcionario SET email = %s, nome = %s, cpf = %s, "
-                    "telefone = %s, cargo = %s WHERE id_funcionario = %s",
-                    (email, nome, cpf, telefone, cargo, id_funcionario),
-                )
+                campos_atualizados["senha"] = senha
+
+            mongo.db["funcionario"].update_one(
+                {"id_funcionario": id_funcionario},
+                {"$set": campos_atualizados},
+            )
+
+            doc_atualizado = mongo.db["funcionario"].find_one(
+                {"id_funcionario": id_funcionario}
+            )
+            funcionario = self._from_doc(doc_atualizado)
+            print("Funcionário atualizado com sucesso!")
+            print(funcionario.to_string())
+            return funcionario
         finally:
-            db.close()
-
-        funcionario = self.consultar_funcionario(id_funcionario)
-        print("Funcionário atualizado com sucesso!")
-        print(funcionario.to_string())
-        return funcionario
-
-
+            mongo.close()
 
     def excluir_funcionario(self):
         try:
@@ -146,19 +184,16 @@ class Controller_Funcionario:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
+        mongo = MongoQueries()
         try:
-            row = db.fetch_one(
-                "SELECT id_funcionario, email, senha, nome, cpf, telefone, cargo "
-                "FROM funcionario WHERE id_funcionario = %s",
-                (id_funcionario,),
-            )
+            mongo.connect()
 
-            if row is None:
+            doc = mongo.db["funcionario"].find_one({"id_funcionario": id_funcionario})
+            if doc is None:
                 print(f"O funcionário {id_funcionario} não existe.")
                 return None
 
-            funcionario = self._from_row(row)
+            funcionario = self._from_doc(doc)
 
             print("\nFuncionário selecionado:")
             print(funcionario.to_string())
@@ -171,23 +206,20 @@ class Controller_Funcionario:
                 print("Exclusão cancelada.")
                 return None
 
-            db.execute(
-                "DELETE FROM funcionario WHERE id_funcionario = %s",
-                (id_funcionario,),
-            )
+            if mongo.db["aluguel"].find_one({"id_funcionario": id_funcionario}):
+                print(
+                    "Não é possível excluir este funcionário, "
+                    "pois existem aluguéis vinculados a ele."
+                )
+                return None
+
+            mongo.db["funcionario"].delete_one({"id_funcionario": id_funcionario})
 
             print("Funcionário excluído com sucesso!")
             return funcionario
 
         except Exception as erro:
-            if "fk_aluguel_funcionario" in str(erro):
-                print(
-                    "Não é possível excluir este funcionário, "
-                    "pois existem aluguéis vinculados a ele."
-                )
-            else:
-                print(f"Não foi possível excluir o funcionário: {erro}")
+            print(f"Não foi possível excluir o funcionário: {erro}")
             return None
         finally:
-            db.close()
-
+            mongo.close()
