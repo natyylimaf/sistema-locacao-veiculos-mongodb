@@ -1,22 +1,58 @@
+import os
+from time import sleep
 
-MENU_PRINCIPAL = """\n========== SISTEMA DE LOCAÇÃO DE VEÍCULOS ==========\n1 - Relatórios\n2 - Inserir registros\n3 - Atualizar registros\n4 - Remover registros\n5 - Sair\n"""
+# Configuração de conexão MongoDB (pode ser ajustada via variáveis de ambiente)
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "locacao_veiculos")
 
-MENU_RELATORIOS = """\n==================== RELATÓRIOS ====================\n1 - Clientes\n2 - Locadoras\n3 - Categorias\n4 - Veículos\n5 - Funcionários\n6 - Aluguéis\n7 - Pagamentos\n8 - Faturamento por categoria\n0 - Voltar ao menu principal\n"""
+# Nomes padrão das coleções no MongoDB (confirmar com o diagrama e controllers da equipa)
+COLECOES = {
+    "clientes": "clientes",
+    "locadoras": "locadoras",
+    "categorias": "categorias",
+    "veiculos": "veiculos",
+    "funcionarios": "funcionarios",
+    "alugueis": "alugueis",
+    "pagamentos": "pagamentos",
+}
 
-MENU_ENTIDADES = """\n==================== ENTIDADES =====================\n1 - Clientes\n2 - Locadoras\n3 - Categorias\n4 - Veículos\n5 - Funcionários\n6 - Aluguéis (cadastro/status/devolução)\n7 - Pagamentos\n0 - Voltar ao menu principal\n"""
+MENU_PRINCIPAL = """
+========== SISTEMA DE LOCAÇÃO DE VEÍCULOS ==========
+1 - Relatórios
+2 - Inserir registros
+3 - Atualizar registros
+4 - Remover registros
+5 - Sair
+"""
 
-QUERY_COUNT = "SELECT COUNT(*) AS total FROM {tabela}"
+MENU_RELATORIOS = """
+==================== RELATÓRIOS ====================
+1 - Clientes
+2 - Locadoras
+3 - Categorias
+4 - Veículos
+5 - Funcionários
+6 - Aluguéis
+7 - Pagamentos
+8 - Faturamento por categoria
+0 - Voltar ao menu principal
+"""
+
+MENU_ENTIDADES = """
+==================== ENTIDADES =====================
+1 - Clientes
+2 - Locadoras
+3 - Categorias
+4 - Veículos
+5 - Funcionários
+6 - Aluguéis (cadastro/status/devolução)
+7 - Pagamentos
+0 - Voltar ao menu principal
+"""
 
 
 def clear_console(wait_time: float = 0.0) -> None:
-    """Limpa o terminal, funcionando tanto no Windows quanto no Linux/macOS.
-
-    Args:
-        wait_time: segundos opcionais de espera antes de limpar a tela.
-    """
-    import os
-    from time import sleep
-
+    """Limpa o terminal, funcionando tanto no Windows quanto no Linux/macOS."""
     if wait_time > 0:
         sleep(wait_time)
     os.system("cls" if os.name == "nt" else "clear")
