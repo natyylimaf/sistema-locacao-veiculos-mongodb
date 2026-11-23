@@ -2,7 +2,8 @@
 
 from datetime import date
 
-from conexion.postgres_queries import PostgresQueries
+from pymongo import MongoClient
+
 from controller.controller_aluguel import Controller_Aluguel
 from controller.controller_categoria import Controller_Categoria
 from controller.controller_cliente import Controller_Cliente
@@ -28,6 +29,13 @@ ctrl_pagamento = Controller_Pagamento()
 ctrl_veiculo = Controller_Veiculo()
 
 
+def _conectar_mongo():
+    uri = getattr(config, "MONGO_URI", "mongodb://localhost:27017/")
+    db_name = getattr(config, "MONGO_DB_NAME", "locacao_veiculos")
+    client = MongoClient(uri, serverSelectionTimeoutMS=3000)
+    return client, client[db_name]
+
+
 def _ler_inteiro(mensagem: str) -> int:
     """Lê um número inteiro e exibe uma mensagem clara em caso de erro."""
     try:
@@ -37,29 +45,48 @@ def _ler_inteiro(mensagem: str) -> int:
 
 
 def _ler_data(mensagem: str, permitir_vazio: bool = False):
-    """Lê datas no formato AAAA-MM-DD, usado pelo PostgreSQL e pelos modelos."""
+    """Lê datas no formato AAAA-MM-DD, usado pelos modelos."""
     texto = input(mensagem).strip()
     if permitir_vazio and not texto:
         return None
     try:
         return date.fromisoformat(texto)
     except ValueError as erro:
-        raise ValueError("Data inválida. Use o formato AAAA-MM-DD (ex.: 2026-10-28).") from erro
+        raise ValueError(
+            "Data inválida. Use o formato AAAA-MM-DD (ex.: 2026-10-28)."
+        ) from erro
 
 
 def _ler_valor(mensagem: str) -> float:
     """Aceita valor decimal com ponto ou vírgula."""
     try:
-        return float(input(mensagem).strip().replace("R$", "").replace(" ", "").replace(",", "."))
+        return float(
+            input(mensagem)
+            .strip()
+            .replace("R$", "")
+            .replace(" ", "")
+            .replace(",", ".")
+        )
     except ValueError as erro:
-        raise ValueError("Digite um valor numérico válido, por exemplo 120,50.") from erro
+        raise ValueError(
+            "Digite um valor numérico válido, por exemplo 120,50."
+        ) from erro
 
 
-def _listar_opcoes(query: str, titulo: str) -> None:
-    """Lista IDs e campos resumidos para ajudar no preenchimento de relações."""
-    db = PostgresQueries()
+def _listar_opcoes(
+    chave_colecao: str, titulo: str, campos: list[str] | None = None
+) -> None:
+    """Lista documentos de uma coleção do MongoDB para ajudar no preenchimento."""
+    colecoes = getattr(config, "COLECOES", {})
+    nome_colecao = colecoes.get(chave_colecao, chave_colecao)
+    client = None
     try:
-        registros = db.fetch_all(query)
+        client, db = _conectar_mongo()
+        projecao = {"_id": 0}
+        if campos:
+            for campo in campos:
+                projecao[campo] = 1
+        registros = list(db[nome_colecao].find({}, projecao))
         print(f"\n--- {titulo} ---")
         if not registros:
             print("Nenhum registro cadastrado.")
@@ -67,7 +94,8 @@ def _listar_opcoes(query: str, titulo: str) -> None:
         for registro in registros:
             print(" | ".join(f"{chave}: {valor}" for chave, valor in registro.items()))
     finally:
-        db.close()
+        if client is not None:
+            client.close()
 
 
 def _executar_com_tratamento(acao) -> None:
@@ -104,7 +132,6 @@ def _exibir_lista_entidade(opcao: int) -> None:
 def _executar_com_repeticao(acao, mensagem: str, opcao_entidade: int = 0) -> None:
     """Executa uma ação em loop, exibindo a lista da entidade (se aplicável) a cada iteração."""
     while True:
-        # Se for passado o ID da entidade (1 a 7), exibe a tabela antes da ação
         if opcao_entidade != 0:
             _exibir_lista_entidade(opcao_entidade)
 
@@ -117,6 +144,7 @@ def _executar_com_repeticao(acao, mensagem: str, opcao_entidade: int = 0) -> Non
 
 
 # --------------------------------------------------------------- RELATÓRIOS
+
 
 def reports(opcao_relatorio: int = 0) -> None:
     opcoes = {
@@ -138,22 +166,25 @@ def reports(opcao_relatorio: int = 0) -> None:
 
 # --------------------------------------------------------------- ALUGUÉIS
 
+
 def _novo_aluguel() -> Aluguel:
-    _listar_opcoes("SELECT id_cliente, nome, cpf FROM cliente ORDER BY id_cliente", "Clientes")
+    _listar_opcoes("clientes", "Clientes", ["id_cliente", "nome", "cpf"])
     id_cliente = _ler_inteiro("ID do cliente: ")
 
-    _listar_opcoes("SELECT id_locadora, nome, cnpj FROM locadora ORDER BY id_locadora", "Locadoras")
+    _listar_opcoes("locadoras", "Locadoras", ["id_locadora", "nome", "cnpj"])
     id_locadora = _ler_inteiro("ID da locadora: ")
 
     _listar_opcoes(
-        "SELECT id_veiculo, placa, marca, modelo, valor_diaria FROM veiculo ORDER BY id_veiculo",
+        "veiculos",
         "Veículos",
+        ["id_veiculo", "placa", "marca", "modelo", "valor_diaria"],
     )
     id_veiculo = _ler_inteiro("ID do veículo: ")
 
     _listar_opcoes(
-        "SELECT id_funcionario, nome, cargo FROM funcionario ORDER BY id_funcionario",
+        "funcionarios",
         "Funcionários",
+        ["id_funcionario", "nome", "cargo"],
     )
     id_funcionario = _ler_inteiro("ID do funcionário responsável: ")
 
@@ -162,12 +193,19 @@ def _novo_aluguel() -> Aluguel:
     veiculo = ctrl_veiculo.consultar_veiculo(id_veiculo)
     funcionario = ctrl_funcionario.consultar_funcionario(id_funcionario)
     if any(item is None for item in (cliente, locadora, veiculo, funcionario)):
-        raise ValueError("Um dos IDs informados não existe. Confira as listas e tente novamente.")
+        raise ValueError(
+            "Um dos IDs informados não existe. Confira as listas e tente novamente."
+        )
 
     data_retirada = _ler_data("Data da retirada (AAAA-MM-DD): ")
     data_prevista = _ler_data("Data prevista para devolução (AAAA-MM-DD): ")
     valor_total = _ler_valor("Valor total do aluguel (R$): ")
-    status = input("Status [ATIVO/FINALIZADO/CANCELADO] (padrão ATIVO): ").strip().upper() or "ATIVO"
+    status = (
+        input("Status [ATIVO/FINALIZADO/CANCELADO] (padrão ATIVO): ")
+        .strip()
+        .upper()
+        or "ATIVO"
+    )
 
     return Aluguel(
         cliente=cliente,
@@ -221,15 +259,19 @@ def _excluir_aluguel() -> None:
 
 # -------------------------------------------------------------- PAGAMENTOS
 
+
 def _inserir_pagamento() -> None:
-    # Exibe a lista de aluguéis para facilitar a vinculação
     print("\n--- Lista de Aluguéis para Pagamento ---")
     relatorio.get_relatorio_alugueis()
 
     id_aluguel = _ler_inteiro("\nID do aluguel relacionado ao pagamento: ")
     valor = _ler_valor("Valor do pagamento (R$): ")
     data_pagamento = _ler_data("Data do pagamento (AAAA-MM-DD): ")
-    metodo = input("Método [DINHEIRO/PIX/CARTAO_CREDITO/CARTAO_DEBITO]: ").strip().upper()
+    metodo = (
+        input("Método [DINHEIRO/PIX/CARTAO_CREDITO/CARTAO_DEBITO]: ")
+        .strip()
+        .upper()
+    )
     status = input("Status [PENDENTE/PAGO/CANCELADO]: ").strip().upper()
 
     pagamento = Pagamento(
@@ -249,7 +291,11 @@ def _atualizar_pagamento() -> None:
     id_aluguel = _ler_inteiro("ID do aluguel relacionado ao pagamento: ")
     valor = _ler_valor("Novo valor (R$): ")
     data_pagamento = _ler_data("Nova data (AAAA-MM-DD): ")
-    metodo = input("Novo método [DINHEIRO/PIX/CARTAO_CREDITO/CARTAO_DEBITO]: ").strip().upper()
+    metodo = (
+        input("Novo método [DINHEIRO/PIX/CARTAO_CREDITO/CARTAO_DEBITO]: ")
+        .strip()
+        .upper()
+    )
     status = input("Novo status [PENDENTE/PAGO/CANCELADO]: ").strip().upper()
 
     pagamento = ctrl_pagamento.atualizar_pagamento(
@@ -271,7 +317,9 @@ def _excluir_pagamento() -> None:
     print("\nPagamento selecionado:")
     print(pagamento.to_string())
 
-    confirmacao = input("\nConfirma a exclusão deste pagamento? (S/N): ").strip().upper()
+    confirmacao = (
+        input("\nConfirma a exclusão deste pagamento? (S/N): ").strip().upper()
+    )
 
     if confirmacao != "S":
         print("Exclusão cancelada.")
@@ -282,6 +330,7 @@ def _excluir_pagamento() -> None:
 
 
 # --------------------------------------------------------------- INSERIR
+
 
 def inserir(opcao_inserir: int = 0) -> None:
     opcoes = {
@@ -300,13 +349,14 @@ def inserir(opcao_inserir: int = 0) -> None:
         _executar_com_repeticao(
             acao,
             "Deseja cadastrar outro registro desta entidade?",
-            0  # Não passamos ID aqui, pois na inserção não precisamos ver a tabela antes
+            0,
         )
     elif opcao_inserir != 0:
         print("Opção de cadastro inválida.")
 
 
 # -------------------------------------------------------------- ATUALIZAR
+
 
 def atualizar(opcao_atualizar: int = 0) -> None:
     opcoes = {
@@ -325,13 +375,14 @@ def atualizar(opcao_atualizar: int = 0) -> None:
         _executar_com_repeticao(
             acao,
             "Deseja atualizar outro registro desta entidade?",
-            opcao_atualizar  # Passa o número da entidade para a lista ser impressa a cada repetição
+            opcao_atualizar,
         )
     elif opcao_atualizar != 0:
         print("Opção de atualização inválida.")
 
 
 # ---------------------------------------------------------------- REMOVER
+
 
 def excluir(opcao_excluir: int = 0) -> None:
     opcoes = {
@@ -350,7 +401,7 @@ def excluir(opcao_excluir: int = 0) -> None:
         _executar_com_repeticao(
             acao,
             "Deseja excluir outro registro desta entidade?",
-            opcao_excluir  # Passa o número da entidade para a lista ser impressa a cada repetição
+            opcao_excluir,
         )
     elif opcao_excluir != 0:
         print("Opção de remoção inválida.")
@@ -366,8 +417,8 @@ def _ler_opcao(mensagem: str, minimo: int, maximo: int) -> int:
 def run() -> None:
     print(tela_inicial.get_updated_screen())
     if any(valor is None for valor in tela_inicial.get_totais().values()):
-        print("\nAviso: não foi possível ler as contagens do PostgreSQL.")
-        print("Confira o serviço do PostgreSQL e o arquivo de credenciais.")
+        print("\nAviso: não foi possível ler as contagens do MongoDB.")
+        print("Confira o serviço do MongoDB e as variáveis MONGO_URI / MONGO_DB_NAME.")
     input("\nPressione Enter para abrir o menu principal...")
 
     while True:
