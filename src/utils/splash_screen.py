@@ -1,20 +1,22 @@
-from conexion.postgres_queries import PostgresQueries
+from pymongo import MongoClient
 from utils import config
 
 
 class SplashScreen:
-    # Nomes de tabela fixos do projeto.
-    TABELAS = (
-        ("clientes", "cliente"),
-        ("locadoras", "locadora"),
-        ("categorias", "categoria"),
-        ("veículos", "veiculo"),
-        ("funcionários", "funcionario"),
-        ("aluguéis", "aluguel"),
-        ("pagamentos", "pagamento"),
+    # (rótulo_exibicao, chave_em_config_COLECOES)
+    COLECOES_EXIBICAO = (
+        ("clientes", "clientes"),
+        ("locadoras", "locadoras"),
+        ("categorias", "categorias"),
+        ("veículos", "veiculos"),
+        ("funcionários", "funcionarios"),
+        ("aluguéis", "alugueis"),
+        ("pagamentos", "pagamentos"),
     )
 
-    def __init__(self):
+    def __init__(self, uri: str = None, db_name: str = None):
+        self.uri = uri or config.MONGO_URI
+        self.db_name = db_name or config.MONGO_DB_NAME
         self.created_by = (
             "Walisson Pastori, Nathália Lima, Davi Pitangui, "
             "Gabriel Modesto e Bryan Nascimento"
@@ -23,92 +25,69 @@ class SplashScreen:
         self.disciplina = "Banco de Dados"
         self.semestre = "2026/2"
 
-    def get_totais(self) -> dict:
-        """Consulta a quantidade de registros de cada tabela."""
-        db = PostgresQueries()
-        totais = {}
+    def _conectar(self):
+        client = MongoClient(self.uri, serverSelectionTimeoutMS=3000)
+        return client, client[self.db_name]
 
+    def _contar_colecao(self, chave_colecao: str):
+        nome_colecao = config.COLECOES[chave_colecao]
+        client = None
         try:
-            for nome_exibicao, tabela in self.TABELAS:
-                resultado = db.fetch_one(
-                    config.QUERY_COUNT.format(tabela=tabela)
-                )
-                totais[nome_exibicao] = (
-                    resultado["total"] if resultado else 0
-                )
-
-        except Exception:
-            # Permite exibir a tela mesmo se houver erro no banco.
-            return {
-                nome: None
-                for nome, _ in self.TABELAS
-            }
-
-        finally:
-            db.close()
-
-        return totais
-
-    # Métodos mantidos para compatibilidade com o projeto.
-    def _get_total(self, tabela: str):
-        db = PostgresQueries()
-
-        try:
-            resultado = db.fetch_one(
-                config.QUERY_COUNT.format(tabela=tabela)
-            )
-            return resultado["total"] if resultado else 0
-
+            client, db = self._conectar()
+            return db[nome_colecao].count_documents({})
         except Exception:
             return None
-
         finally:
-            db.close()
+            if client is not None:
+                client.close()
 
+    def get_totais(self) -> dict:
+        """Consulta a quantidade de documentos de cada coleção no MongoDB."""
+        totais = {}
+        for rotulo, chave in self.COLECOES_EXIBICAO:
+            totais[rotulo] = self._contar_colecao(chave)
+        return totais
+
+    # Métodos mantidos para compatibilidade com o projeto
     def get_total_clientes(self):
-        return self._get_total("cliente")
+        return self._contar_colecao("clientes")
 
     def get_total_locadoras(self):
-        return self._get_total("locadora")
+        return self._contar_colecao("locadoras")
 
     def get_total_categorias(self):
-        return self._get_total("categoria")
+        return self._contar_colecao("categorias")
 
     def get_total_veiculos(self):
-        return self._get_total("veiculo")
+        return self._contar_colecao("veiculos")
 
     def get_total_funcionarios(self):
-        return self._get_total("funcionario")
+        return self._contar_colecao("funcionarios")
 
     def get_total_alugueis(self):
-        return self._get_total("aluguel")
+        return self._contar_colecao("alugueis")
 
     def get_total_pagamentos(self):
-        return self._get_total("pagamento")
+        return self._contar_colecao("pagamentos")
 
     def get_updated_screen(self) -> str:
-        # Obtém os totais do banco de dados.
         totais = self.get_totais()
 
-        # Formata os totais para exibição.
         def formatar(nome: str) -> str:
             valor = totais.get(nome)
             return "N/D" if valor is None else str(valor)
 
-        # Define o tamanho da moldura.
         largura = 62
         borda = "#" * (largura + 2)
 
-        # Cria uma linha com as laterais da moldura.
         def linha(texto=""):
             return f"#{texto:<{largura}}#"
 
-        # Monta a tela que será exibida no terminal.
         return "\n".join([
             borda,
             linha("SISTEMA DE LOCAÇÃO DE VEÍCULOS".center(largura)),
             linha(),
-            linha("  TOTAL DE REGISTROS EXISTENTES"),
+            linha("  TOTAL DE DOCUMENTOS EXISTENTES"),
             linha(f"    Clientes:      {formatar('clientes'):>6}"),
             linha(f"    Locadoras:     {formatar('locadoras'):>6}"),
             linha(f"    Categorias:    {formatar('categorias'):>6}"),
