@@ -1,56 +1,186 @@
-"""Relatórios do Sistema de Locação de Veículos."""
+"""Relatórios do Sistema de Locação de Veículos (MongoDB)."""
 
-from pathlib import Path
-
-from conexion.postgres_queries import PostgresQueries
-
-SQL_DIR = Path(__file__).resolve().parent.parent / "sql"
+from pymongo import MongoClient
+from utils import config
 
 
 class Relatorio:
-    def __init__(self):
-        # Os arquivos reais do projeto usam nomes no singular, como relatorio_cliente.sql.
-        self.query_relatorio_clientes = (SQL_DIR / "relatorio_cliente.sql").read_text(encoding="utf-8")
-        self.query_relatorio_locadoras = (SQL_DIR / "relatorio_locadora.sql").read_text(encoding="utf-8")
-        self.query_relatorio_veiculos = (SQL_DIR / "relatorio_veiculo.sql").read_text(encoding="utf-8")
-        self.query_relatorio_funcionarios = (SQL_DIR / "relatorio_funcionario.sql").read_text(encoding="utf-8")
-        self.query_relatorio_categorias = (SQL_DIR / "relatorio_categoria.sql").read_text(encoding="utf-8")
-        self.query_relatorio_alugueis = (SQL_DIR / "relatorio_aluguel.sql").read_text(encoding="utf-8")
-        self.query_relatorio_pagamentos = (SQL_DIR / "relatorio_pagamento.sql").read_text(encoding="utf-8")
-        self.query_relatorio_faturamento = (SQL_DIR / "relatorio_faturamento_por_categoria.sql").read_text(encoding="utf-8")
+    def __init__(self, uri: str = None, db_name: str = None):
+        self.uri = uri or config.MONGO_URI
+        self.db_name = db_name or config.MONGO_DB_NAME
+
+    def _conectar(self):
+        client = MongoClient(self.uri, serverSelectionTimeoutMS=3000)
+        return client, client[self.db_name]
 
     @staticmethod
-    def _exibir(query: str, titulo: str, pausar: bool = True) -> None:
-        db = PostgresQueries()
-        try:
-            resultado = db.sqlToDataFrame(query)
-            print(f"\n--- {titulo} ---")
-            print(resultado.to_string(index=False))
-        finally:
-            db.close()
+    def _exibir_documentos(titulo: str, registros: list, pausar: bool = True) -> None:
+        print(f"\n--- {titulo} ---")
+        if not registros:
+            print("Nenhum registro encontrado.")
+        else:
+            for idx, doc in enumerate(registros, start=1):
+                limpo = {k: v for k, v in doc.items() if k != "_id"}
+                linha = " | ".join(f"{chave}: {valor}" for chave, valor in limpo.items())
+                print(f"{idx}. {linha}")
         if pausar:
             input(f"\nPressione Enter para sair do relatório de {titulo.lower()}...")
 
+    def _listar_colecao(self, chave_colecao: str, titulo: str, pausar: bool = True) -> None:
+        nome_colecao = config.COLECOES[chave_colecao]
+        client = None
+        try:
+            client, db = self._conectar()
+            registros = list(db[nome_colecao].find({}))
+            self._exibir_documentos(titulo, registros, pausar=pausar)
+        finally:
+            if client is not None:
+                client.close()
+
     def get_relatorio_clientes(self):
-        self._exibir(self.query_relatorio_clientes, "Clientes")
+        self._listar_colecao("clientes", "Clientes")
 
     def get_relatorio_locadoras(self):
-        self._exibir(self.query_relatorio_locadoras, "Locadoras")
+        self._listar_colecao("locadoras", "Locadoras")
 
     def get_relatorio_veiculos(self):
-        self._exibir(self.query_relatorio_veiculos, "Veículos")
+        self._listar_colecao("veiculos", "Veículos")
 
     def get_relatorio_funcionarios(self):
-        self._exibir(self.query_relatorio_funcionarios, "Funcionários")
+        self._listar_colecao("funcionarios", "Funcionários")
 
     def get_relatorio_categorias(self, pausar: bool = True):
-        self._exibir(self.query_relatorio_categorias, "Categorias", pausar)
-
-    def get_relatorio_alugueis(self):
-        self._exibir(self.query_relatorio_alugueis, "Aluguéis")
+        self._listar_colecao("categorias", "Categorias", pausar=pausar)
 
     def get_relatorio_pagamentos(self):
-        self._exibir(self.query_relatorio_pagamentos, "Pagamentos")
+        self._listar_colecao("pagamentos", "Pagamentos")
+
+    def get_relatorio_alugueis(self):
+        """Relatório de aluguéis utilizando $lookup para relacionar as coleções."""
+        client = None
+        try:
+            client, db = self._conectar()
+            col_alugueis = config.COLECOES["alugueis"]
+            col_clientes = config.COLECOES["clientes"]
+            col_locadoras = config.COLECOES["locadoras"]
+            col_veiculos = config.COLECOES["veiculos"]
+            col_funcionarios = config.COLECOES["funcionarios"]
+
+            pipeline = [
+                {
+                    "$lookup": {
+                        "from": col_clientes,
+                        "localField": "id_cliente",
+                        "foreignField": "id_cliente",
+                        "as": "cliente_doc",
+                    }
+                },
+                {"$unwind": {"path": "$cliente_doc", "preserveNullAndEmptyArrays": True}},
+                {
+                    "$lookup": {
+                        "from": col_locadoras,
+                        "localField": "id_locadora",
+                        "foreignField": "id_locadora",
+                        "as": "locadora_doc",
+                    }
+                },
+                {"$unwind": {"path": "$locadora_doc", "preserveNullAndEmptyArrays": True}},
+                {
+                    "$lookup": {
+                        "from": col_veiculos,
+                        "localField": "id_veiculo",
+                        "foreignField": "id_veiculo",
+                        "as": "veiculo_doc",
+                    }
+                },
+                {"$unwind": {"path": "$veiculo_doc", "preserveNullAndEmptyArrays": True}},
+                {
+                    "$lookup": {
+                        "from": col_funcionarios,
+                        "localField": "id_funcionario",
+                        "foreignField": "id_funcionario",
+                        "as": "funcionario_doc",
+                    }
+                },
+                {"$unwind": {"path": "$funcionario_doc", "preserveNullAndEmptyArrays": True}},
+                {
+                    "$project": {
+                        "_id": 0,
+                        "id_aluguel": 1,
+                        "nome_cliente": "$cliente_doc.nome",
+                        "nome_locadora": "$locadora_doc.nome",
+                        "marca": "$veiculo_doc.marca",
+                        "modelo": "$veiculo_doc.modelo",
+                        "nome_funcionario": "$funcionario_doc.nome",
+                        "data_retirada": 1,
+                        "data_devolucao_prevista": 1,
+                        "data_devolucao_real": {
+                            "$ifNull": ["$data_devolucao_real", "Não devolvido"]
+                        },
+                        "valor_total": 1,
+                        "status": 1,
+                    }
+                },
+                {"$sort": {"id_aluguel": 1}},
+            ]
+
+            resultados = list(db[col_alugueis].aggregate(pipeline))
+            self._exibir_documentos("Aluguéis", resultados)
+        finally:
+            if client is not None:
+                client.close()
 
     def get_relatorio_faturamento(self):
-        self._exibir(self.query_relatorio_faturamento, "Faturamento por categoria")
+        """Faturamento por categoria utilizando agregação com $group e$sum."""
+        client = None
+        try:
+            client, db = self._conectar()
+            col_alugueis = config.COLECOES["alugueis"]
+            col_veiculos = config.COLECOES["veiculos"]
+            col_categorias = config.COLECOES["categorias"]
+
+            pipeline = [
+                {"$match": {"status": {"$ne": "CANCELADO"}}},
+                {
+                    "$lookup": {
+                        "from": col_veiculos,
+                        "localField": "id_veiculo",
+                        "foreignField": "id_veiculo",
+                        "as": "veiculo_doc",
+                    }
+                },
+                {"$unwind": "$veiculo_doc"},
+                {
+                    "$lookup": {
+                        "from": col_categorias,
+                        "localField": "veiculo_doc.id_categoria",
+                        "foreignField": "id_categoria",
+                        "as": "categoria_doc",
+                    }
+                },
+                {"$unwind": "$categoria_doc"},
+                {
+                    "$group": {
+                        "_id": "$categoria_doc.nome",
+                        "total_alugueis": {"$sum": 1},
+                        "faturamento": {"$sum": "$valor_total"},
+                        "ticket_medio": {"$avg": "$valor_total"},
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "categoria": "$_id",
+                        "total_alugueis": 1,
+                        "faturamento": {"$round": ["$faturamento", 2]},
+                        "ticket_medio": {"$round": ["$ticket_medio", 2]},
+                    }
+                },
+                {"$sort": {"faturamento": -1}},
+            ]
+
+            resultados = list(db[col_alugueis].aggregate(pipeline))
+            self._exibir_documentos("Faturamento por categoria", resultados)
+        finally:
+            if client is not None:
+                client.close()
