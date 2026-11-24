@@ -86,7 +86,11 @@ def _listar_opcoes(
         if campos:
             for campo in campos:
                 projecao[campo] = 1
-        registros = list(db[nome_colecao].find({}, projecao))
+        campo_id = campos[0] if campos else "_id"
+
+        registros = list(
+            db[nome_colecao].find({}, projecao).sort(campo_id, 1)
+        )
         print(f"\n--- {titulo} ---")
         if not registros:
             print("Nenhum registro cadastrado.")
