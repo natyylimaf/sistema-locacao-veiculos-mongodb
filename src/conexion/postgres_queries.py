@@ -12,7 +12,7 @@ class PostgresQueries:
     def __init__(self):
         self.host = os.getenv("POSTGRES_HOST", "localhost")
         self.port = int(os.getenv("POSTGRES_PORT", "5432"))
-        self.database = os.getenv("POSTGRES_DB", "LocacaoVeiculos")
+        self.database = os.getenv("PGDATABASE", "locacao")
         auth_file = Path(__file__).resolve().parent / "passphrase" / "authentication.postgres"
         file_user, file_password = [part.strip() for part in auth_file.read_text(encoding="utf-8").strip().split(",", 1)]
         self.user = os.getenv("POSTGRES_USER", file_user)
