@@ -480,7 +480,7 @@ def create_indexes(mongo):
 
     Os índices únicos dos IDs usam partialFilterExpression para ignorar
 
-    documentos antigos que ainda não tenham o campo id_\*.
+    documentos antigos que ainda não tenham o campo id_*.
 
     """
 
@@ -530,7 +530,7 @@ def extract_and_insert(postgres, mongo):
 
     Extrai as sete tabelas e sincroniza os documentos no MongoDB.
 
-    Mantém os IDs originais nos campos id_\*; o MongoDB cria _id.
+    Mantém os IDs originais nos campos id_*; o MongoDB cria _id.
 
     """
 
