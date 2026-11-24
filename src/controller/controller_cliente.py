@@ -1,46 +1,76 @@
+import re
+from pymongo import DESCENDING
+from pymongo.errors import DuplicateKeyError
+
 from model.cliente import Cliente
-from conexion.postgres_queries import PostgresQueries
+from conexion.mongo_queries import MongoQueries
 from controller.validacao_cpf import ler_cpf
+
 
 class Controller_Cliente:
 
-    def __init__(self):
-        pass
+    @staticmethod
+    def _from_doc(doc: dict):
+        """Converte um documento MongoDB em um objeto Cliente."""
+        if doc is None:
+            return None
+
+        return Cliente(
+            doc["id_cliente"],
+            doc["nome"],
+            doc["cpf"],
+            doc["telefone"],
+            doc["email"],
+        )
 
     @staticmethod
-    def _cliente_from_row(row):
-        if row is None:
-            return None
-        return Cliente(
-            row["id_cliente"],
-            row["nome"],
-            row["cpf"],
-            row["telefone"],
-            row["email"],
+    def _somente_digitos(valor: str) -> str:
+        """Remove caracteres que não sejam números."""
+        return re.sub(r"\D", "", valor or "")
+
+    @staticmethod
+    def _proximo_id(mongo: MongoQueries) -> int:
+        """Gera o próximo id_cliente inteiro sequencial."""
+        ultimo = mongo.db["cliente"].find_one(
+            {"id_cliente": {"$type": "number"}},
+            sort=[("id_cliente", DESCENDING)]
         )
 
-    def verifica_existencia_cliente(self, db: PostgresQueries, id_cliente: int) -> bool:
-        """Retorna True quando o cliente existe."""
-        row = db.fetch_one(
-            "SELECT id_cliente FROM cliente WHERE id_cliente = %s",
-            (id_cliente,),
+        return (
+            int(ultimo["id_cliente"]) + 1
+            if ultimo and "id_cliente" in ultimo
+            else 1
         )
-        return row is not None
+
+    def verifica_existencia_cliente(
+        self, mongo: MongoQueries, id_cliente: int
+    ) -> bool:
+        """Verifica se o cliente existe."""
+        return (
+            mongo.db["cliente"].find_one(
+                {"id_cliente": id_cliente}
+            ) is not None
+        )
 
     def consultar_cliente(self, id_cliente: int):
-        db = PostgresQueries()
+        """Consulta um cliente pelo ID."""
+        mongo = MongoQueries()
+
         try:
-            row = db.fetch_one(
-                "SELECT id_cliente, nome, cpf, telefone, email "
-                "FROM cliente WHERE id_cliente = %s",
-                (id_cliente,),
-            )
-            return self._cliente_from_row(row)
+            mongo.connect()
+
+            doc = mongo.db["cliente"].find_one({
+                "id_cliente": id_cliente
+            })
+
+            return self._from_doc(doc)
+
         finally:
-            db.close()
+            mongo.close()
 
     def inserir_cliente(self) -> Cliente:
-        """Solicita os dados, impede CPF duplicado e insere o cliente."""
+        """Cadastra um novo cliente."""
+
         nome = input("Nome: ").strip()
         cpf = ler_cpf("CPF: ")
         telefone = input("Telefone: ").strip()
@@ -50,42 +80,63 @@ class Controller_Cliente:
             print("Todos os campos são obrigatórios.")
             return None
 
-        db = PostgresQueries()
+        cpf_limpo = self._somente_digitos(cpf)
+
+        mongo = MongoQueries()
+
         try:
-            existente = db.fetch_one(
-                "SELECT id_cliente FROM cliente "
-                "WHERE regexp_replace(cpf, '[^0-9]', '', 'g') = %s",
-                (cpf,),
-            )
-            if existente is not None:
+            mongo.connect()
+
+            # Verifica se o CPF já está cadastrado.
+            if mongo.db["cliente"].find_one({
+                "cpf": {"$in": [cpf_limpo, cpf]}
+            }):
                 print(f"O CPF {cpf} já está cadastrado.")
                 return None
 
-            row = db.execute(
-                "INSERT INTO cliente (nome, cpf, telefone, email) "
-                "VALUES (%s, %s, %s, %s) "
-                "RETURNING id_cliente, nome, cpf, telefone, email",
-                (nome, cpf, telefone, email),
-                returning=True,
-            )
-            cliente = self._cliente_from_row(row)
+            novo_id = self._proximo_id(mongo)
+
+            novo_doc = {
+                "id_cliente": novo_id,
+                "nome": nome,
+                "cpf": cpf_limpo,
+                "telefone": telefone,
+                "email": email,
+            }
+
+            mongo.db["cliente"].insert_one(novo_doc)
+
+            cliente = self._from_doc(novo_doc)
+
             print("Cliente cadastrado com sucesso!")
             print(cliente.to_string())
-            return cliente
-        finally:
-            db.close()
 
+            return cliente
+
+        except DuplicateKeyError:
+            print("Já existe um cliente cadastrado com esse CPF.")
+            return None
+
+        finally:
+            mongo.close()
 
     def atualizar_cliente(self) -> Cliente:
+        """Atualiza os dados de um cliente existente."""
+
         try:
-            id_cliente = int(input("ID do cliente que deseja atualizar: ").strip())
+            id_cliente = int(
+                input("ID do cliente que deseja atualizar: ").strip()
+            )
         except ValueError:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
+        mongo = MongoQueries()
+
         try:
-            if not self.verifica_existencia_cliente(db, id_cliente):
+            mongo.connect()
+
+            if not self.verifica_existencia_cliente(mongo, id_cliente):
                 print(f"O cliente de ID {id_cliente} não existe.")
                 return None
 
@@ -98,54 +149,73 @@ class Controller_Cliente:
                 print("Todos os campos são obrigatórios.")
                 return None
 
-            cpf_em_uso = db.fetch_one(
-                "SELECT id_cliente FROM cliente "
-                "WHERE regexp_replace(cpf, '[^0-9]', '', 'g') = %s "
-                "AND id_cliente <> %s",
-                (cpf, id_cliente),
-            )
+            cpf_limpo = self._somente_digitos(cpf)
+
+            # Verifica se o CPF pertence a outro cliente.
+            cpf_em_uso = mongo.db["cliente"].find_one({
+                "cpf": {"$in": [cpf_limpo, cpf]},
+                "id_cliente": {"$ne": id_cliente}
+            })
+
             if cpf_em_uso is not None:
                 print(f"O CPF {cpf} já pertence a outro cliente.")
                 return None
 
-            row = db.execute(
-                "UPDATE cliente SET nome = %s, cpf = %s, "
-                "telefone = %s, email = %s "
-                "WHERE id_cliente = %s "
-                "RETURNING id_cliente, nome, cpf, telefone, email",
-                (nome, cpf, telefone, email, id_cliente),
-                returning=True,
+            mongo.db["cliente"].update_one(
+                {"id_cliente": id_cliente},
+                {
+                    "$set": {
+                        "nome": nome,
+                        "cpf": cpf_limpo,
+                        "telefone": telefone,
+                        "email": email,
+                    }
+                }
             )
 
-            cliente = self._cliente_from_row(row)
+            doc_atualizado = mongo.db["cliente"].find_one({
+                "id_cliente": id_cliente
+            })
+
+            cliente = self._from_doc(doc_atualizado)
+
             print("Cliente atualizado com sucesso!")
             print(cliente.to_string())
+
             return cliente
+
+        except DuplicateKeyError:
+            print("Já existe outro cliente cadastrado com esse CPF.")
+            return None
+
         finally:
-            db.close()
-
-
+            mongo.close()
 
     def excluir_cliente(self):
+        """Exclui um cliente, desde que não possua aluguéis vinculados."""
+
         try:
-            id_cliente = int(input("ID do cliente que deseja excluir: ").strip())
+            id_cliente = int(
+                input("ID do cliente que deseja excluir: ").strip()
+            )
         except ValueError:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
-        try:
-            row = db.fetch_one(
-                "SELECT id_cliente, nome, cpf, telefone, email "
-                "FROM cliente WHERE id_cliente = %s",
-                (id_cliente,),
-            )
+        mongo = MongoQueries()
 
-            if row is None:
+        try:
+            mongo.connect()
+
+            doc = mongo.db["cliente"].find_one({
+                "id_cliente": id_cliente
+            })
+
+            if doc is None:
                 print(f"O cliente de ID {id_cliente} não existe.")
                 return None
 
-            cliente = self._cliente_from_row(row)
+            cliente = self._from_doc(doc)
 
             print("\nCliente selecionado:")
             print(cliente.to_string())
@@ -158,23 +228,29 @@ class Controller_Cliente:
                 print("Exclusão cancelada.")
                 return None
 
-            db.execute(
-                "DELETE FROM cliente WHERE id_cliente = %s",
-                (id_cliente,),
-            )
+            # Verifica se existem aluguéis vinculados ao cliente.
+            aluguel_existente = mongo.db["aluguel"].find_one({
+                "id_cliente": id_cliente
+            })
 
-            print("Cliente removido com sucesso!")
-            return cliente
-
-        except Exception as erro:
-            if "fk_aluguel_cliente" in str(erro):
+            if aluguel_existente:
                 print(
                     "Não é possível excluir este cliente, "
                     "pois existem aluguéis vinculados a ele."
                 )
-            else:
-                print(f"Não foi possível excluir o cliente: {erro}")
-            return None
-        finally:
-            db.close()
+                return None
 
+            mongo.db["cliente"].delete_one({
+                "id_cliente": id_cliente
+            })
+
+            print("Cliente removido com sucesso!")
+
+            return cliente
+
+        except Exception as erro:
+            print(f"Não foi possível excluir o cliente: {erro}")
+            return None
+
+        finally:
+            mongo.close()

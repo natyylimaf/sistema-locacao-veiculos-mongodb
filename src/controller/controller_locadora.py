@@ -1,81 +1,151 @@
+import re
+from pymongo import DESCENDING
+from pymongo.errors import DuplicateKeyError
+
 from model.locadora import Locadora
-from conexion.postgres_queries import PostgresQueries
+from conexion.mongo_queries import MongoQueries
 
 
 class Controller_Locadora:
-    """Controlador CRUD de Locadora, baseado no diagrama do projeto."""
 
     @staticmethod
-    def _from_row(row):
-        if row is None:
+    def _from_doc(doc: dict):
+        """Converte um documento MongoDB em um objeto Locadora."""
+        if doc is None:
             return None
+
         return Locadora(
-            row["id_locadora"], row["nome"], row["cnpj"],
-            row["telefone"], row["email"]
+            doc["id_locadora"],
+            doc["nome"],
+            doc["cnpj"],
+            doc["telefone"],
+            doc["email"]
         )
 
-    def verifica_existencia_locadora(self, db: PostgresQueries, id_locadora: int) -> bool:
-        row = db.fetch_one(
-            "SELECT id_locadora FROM locadora WHERE id_locadora = %s",
-            (id_locadora,),
+    @staticmethod
+    def _somente_digitos(valor: str) -> str:
+        """Remove caracteres que não sejam números do CNPJ."""
+        return re.sub(r"\D", "", valor or "")
+
+    @staticmethod
+    def _proximo_id(mongo: MongoQueries) -> int:
+        """Gera o próximo id_locadora inteiro sequencial."""
+        ultimo = mongo.db["locadora"].find_one(
+            {"id_locadora": {"$type": "number"}},
+            sort=[("id_locadora", DESCENDING)]
         )
-        return row is not None
+
+        return (
+            int(ultimo["id_locadora"]) + 1
+            if ultimo and "id_locadora" in ultimo
+            else 1
+        )
+
+    def verifica_existencia_locadora(
+        self, mongo: MongoQueries, id_locadora: int
+    ) -> bool:
+        """Verifica se a locadora existe."""
+        return (
+            mongo.db["locadora"].find_one(
+                {"id_locadora": id_locadora}
+            ) is not None
+        )
 
     def consultar_locadora(self, id_locadora: int):
-        db = PostgresQueries()
+        """Consulta uma locadora pelo seu ID."""
+        mongo = MongoQueries()
+
         try:
-            row = db.fetch_one(
-                "SELECT id_locadora, nome, cnpj, telefone, email "
-                "FROM locadora WHERE id_locadora = %s",
-                (id_locadora,),
-            )
-            return self._from_row(row)
+            mongo.connect()
+
+            doc = mongo.db["locadora"].find_one({
+                "id_locadora": id_locadora
+            })
+
+            return self._from_doc(doc)
+
         finally:
-            db.close()
+            mongo.close()
 
     def inserir_locadora(self) -> Locadora:
+        """Cadastra uma nova locadora."""
+
         nome = input("Nome da locadora: ").strip()
         cnpj = input("CNPJ: ").strip()
         telefone = input("Telefone: ").strip()
         email = input("E-mail: ").strip()
+
         if not all((nome, cnpj, telefone, email)):
             print("Todos os campos são obrigatórios.")
             return None
 
-        db = PostgresQueries()
+        cnpj_limpo = self._somente_digitos(cnpj)
+
+        if len(cnpj_limpo) != 14:
+            print("O CNPJ deve possuir 14 números.")
+            return None
+
+        mongo = MongoQueries()
+
         try:
-            existente = db.fetch_one(
-                "SELECT id_locadora FROM locadora WHERE cnpj = %s",
-                (cnpj,),
-            )
-            if existente:
+            mongo.connect()
+
+            collection = mongo.db["locadora"]
+
+            # Verifica se o CNPJ já está cadastrado.
+            existente = collection.find_one({
+                "cnpj": cnpj_limpo
+            })
+
+            if existente is not None:
                 print(f"O CNPJ {cnpj} já está cadastrado.")
                 return None
 
-            row = db.execute(
-                "INSERT INTO locadora (nome, cnpj, telefone, email) "
-                "VALUES (%s, %s, %s, %s) "
-                "RETURNING id_locadora, nome, cnpj, telefone, email",
-                (nome, cnpj, telefone, email),
-                returning=True,
-            )
-            locadora = self._from_row(row)
+            novo_id = self._proximo_id(mongo)
+
+            novo_doc = {
+                "id_locadora": novo_id,
+                "nome": nome,
+                "cnpj": cnpj_limpo,
+                "telefone": telefone,
+                "email": email
+            }
+
+            collection.insert_one(novo_doc)
+
+            locadora = self._from_doc(novo_doc)
+
             print("Locadora cadastrada com sucesso!")
             print(locadora.to_string())
+
             return locadora
+
+        except DuplicateKeyError:
+            print("Já existe uma locadora cadastrada com esse CNPJ.")
+            return None
+
         finally:
-            db.close()
+            mongo.close()
 
     def atualizar_locadora(self) -> Locadora:
+        """Atualiza os dados de uma locadora existente."""
+
         try:
-            id_locadora = int(input("ID da locadora que deseja atualizar: ").strip())
+            id_locadora = int(
+                input("ID da locadora que deseja atualizar: ").strip()
+            )
         except ValueError:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
+        mongo = MongoQueries()
+
         try:
-            if not self.verifica_existencia_locadora(db, id_locadora):
+            mongo.connect()
+
+            collection = mongo.db["locadora"]
+
+            if not self.verifica_existencia_locadora(mongo, id_locadora):
                 print(f"A locadora {id_locadora} não existe.")
                 return None
 
@@ -83,35 +153,60 @@ class Controller_Locadora:
             cnpj = input("Novo CNPJ: ").strip()
             telefone = input("Novo telefone: ").strip()
             email = input("Novo e-mail: ").strip()
+
             if not all((nome, cnpj, telefone, email)):
                 print("Todos os campos são obrigatórios.")
                 return None
 
-            cnpj_em_uso = db.fetch_one(
-                "SELECT id_locadora FROM locadora "
-                "WHERE cnpj = %s AND id_locadora <> %s",
-                (cnpj, id_locadora),
-            )
-            if cnpj_em_uso:
+            cnpj_limpo = self._somente_digitos(cnpj)
+
+            if len(cnpj_limpo) != 14:
+                print("O CNPJ deve possuir 14 números.")
+                return None
+
+            # Verifica se o CNPJ pertence a outra locadora.
+            cnpj_em_uso = collection.find_one({
+                "cnpj": cnpj_limpo,
+                "id_locadora": {"$ne": id_locadora}
+            })
+
+            if cnpj_em_uso is not None:
                 print(f"O CNPJ {cnpj} já pertence a outra locadora.")
                 return None
 
-            row = db.execute(
-                "UPDATE locadora SET nome = %s, cnpj = %s, telefone = %s, email = %s "
-                "WHERE id_locadora = %s "
-                "RETURNING id_locadora, nome, cnpj, telefone, email",
-                (nome, cnpj, telefone, email, id_locadora),
-                returning=True,
+            collection.update_one(
+                {"id_locadora": id_locadora},
+                {
+                    "$set": {
+                        "nome": nome,
+                        "cnpj": cnpj_limpo,
+                        "telefone": telefone,
+                        "email": email
+                    }
+                }
             )
-            locadora = self._from_row(row)
+
+            doc_atualizado = collection.find_one({
+                "id_locadora": id_locadora
+            })
+
+            locadora = self._from_doc(doc_atualizado)
+
             print("Locadora atualizada com sucesso!")
             print(locadora.to_string())
-            return locadora
-        finally:
-            db.close()
 
+            return locadora
+
+        except DuplicateKeyError:
+            print("Já existe outra locadora cadastrada com esse CNPJ.")
+            return None
+
+        finally:
+            mongo.close()
 
     def excluir_locadora(self):
+        """Exclui uma locadora, desde que não possua aluguéis vinculados."""
+
         try:
             id_locadora = int(
                 input("ID da locadora que deseja excluir: ").strip()
@@ -120,19 +215,20 @@ class Controller_Locadora:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
-        try:
-            row = db.fetch_one(
-                "SELECT id_locadora, nome, cnpj, telefone, email "
-                "FROM locadora WHERE id_locadora = %s",
-                (id_locadora,),
-            )
+        mongo = MongoQueries()
 
-            if row is None:
+        try:
+            mongo.connect()
+
+            doc = mongo.db["locadora"].find_one({
+                "id_locadora": id_locadora
+            })
+
+            if doc is None:
                 print(f"A locadora {id_locadora} não existe.")
                 return None
 
-            locadora = self._from_row(row)
+            locadora = self._from_doc(doc)
 
             print("\nLocadora selecionada:")
             print(locadora.to_string())
@@ -145,22 +241,33 @@ class Controller_Locadora:
                 print("Exclusão cancelada.")
                 return None
 
-            db.execute(
-                "DELETE FROM locadora WHERE id_locadora = %s",
-                (id_locadora,),
-            )
+            # Verifica se existem aluguéis vinculados à locadora.
+            aluguel_existente = mongo.db["aluguel"].find_one({
+                "id_locadora": id_locadora
+            })
 
-            print("Locadora excluída com sucesso!")
-            return locadora
-
-        except Exception as erro:
-            if "fk_aluguel_locadora" in str(erro):
+            if aluguel_existente is not None:
                 print(
                     "Não é possível excluir esta locadora, "
                     "pois existem aluguéis vinculados a ela."
                 )
-            else:
-                print(f"Não foi possível excluir a locadora: {erro}")
+                return None
+
+            resultado = mongo.db["locadora"].delete_one({
+                "id_locadora": id_locadora
+            })
+
+            if resultado.deleted_count == 0:
+                print("Não foi possível encontrar a locadora para exclusão.")
+                return None
+
+            print("Locadora excluída com sucesso!")
+
+            return locadora
+
+        except Exception as erro:
+            print(f"Não foi possível excluir a locadora: {erro}")
             return None
+
         finally:
-            db.close()
+            mongo.close()

@@ -1,109 +1,186 @@
+from pymongo import DESCENDING
+from pymongo.errors import DuplicateKeyError
+
 from model.categoria import Categoria
-from conexion.postgres_queries import PostgresQueries
+from conexion.mongo_queries import MongoQueries
 
 
 class Controller_Categoria:
-    """Controlador CRUD de Categoria, baseado no diagrama do projeto."""
 
     @staticmethod
-    def _from_row(row):
-        if row is None:
+    def _from_doc(doc: dict):
+        """Converte um documento MongoDB em um objeto Categoria."""
+        if doc is None:
             return None
-        return Categoria(row["id_categoria"], row["nome"], row["descricao"])
 
-    def verifica_existencia_categoria(self, db: PostgresQueries, id_categoria: int) -> bool:
-        row = db.fetch_one(
-            "SELECT id_categoria FROM categoria WHERE id_categoria = %s",
-            (id_categoria,),
+        return Categoria(
+            doc["id_categoria"],
+            doc["nome"],
+            doc["descricao"]
         )
-        return row is not None
+
+    @staticmethod
+    def _proximo_id(mongo: MongoQueries) -> int:
+        """Gera o próximo id_categoria inteiro sequencial."""
+        ultimo = mongo.db["categoria"].find_one(
+            {"id_categoria": {"$type": "number"}},
+            sort=[("id_categoria", DESCENDING)]
+        )
+
+        return (
+            int(ultimo["id_categoria"]) + 1
+            if ultimo and "id_categoria" in ultimo
+            else 1
+        )
+
+    def verifica_existencia_categoria(
+        self, mongo: MongoQueries, id_categoria: int
+    ) -> bool:
+        """Verifica se a categoria existe."""
+        return (
+            mongo.db["categoria"].find_one(
+                {"id_categoria": id_categoria}
+            ) is not None
+        )
 
     def consultar_categoria(self, id_categoria: int):
-        db = PostgresQueries()
+        """Consulta uma categoria pelo seu ID."""
+        mongo = MongoQueries()
+
         try:
-            row = db.fetch_one(
-                "SELECT id_categoria, nome, descricao FROM categoria "
-                "WHERE id_categoria = %s",
-                (id_categoria,),
-            )
-            return self._from_row(row)
+            mongo.connect()
+
+            doc = mongo.db["categoria"].find_one({
+                "id_categoria": id_categoria
+            })
+
+            return self._from_doc(doc)
+
         finally:
-            db.close()
+            mongo.close()
 
     def inserir_categoria(self) -> Categoria:
+        """Cadastra uma nova categoria."""
+
         nome = input("Nome da categoria: ").strip()
         descricao = input("Descrição: ").strip()
+
         if not nome or not descricao:
             print("Nome e descrição são obrigatórios.")
             return None
 
-        db = PostgresQueries()
+        mongo = MongoQueries()
+
         try:
-            existente = db.fetch_one(
-                "SELECT id_categoria FROM categoria WHERE nome = %s",
-                (nome,),
-            )
-            if existente:
+            mongo.connect()
+
+            collection = mongo.db["categoria"]
+
+            # Verifica se o nome da categoria já está cadastrado.
+            existente = collection.find_one({
+                "nome": nome
+            })
+
+            if existente is not None:
                 print(f"A categoria '{nome}' já existe.")
                 return None
 
-            row = db.execute(
-                "INSERT INTO categoria (nome, descricao) VALUES (%s, %s) "
-                "RETURNING id_categoria, nome, descricao",
-                (nome, descricao),
-                returning=True,
-            )
-            categoria = self._from_row(row)
+            novo_id = self._proximo_id(mongo)
+
+            novo_doc = {
+                "id_categoria": novo_id,
+                "nome": nome,
+                "descricao": descricao
+            }
+
+            collection.insert_one(novo_doc)
+
+            categoria = self._from_doc(novo_doc)
+
             print("Categoria cadastrada com sucesso!")
             print(categoria.to_string())
+
             return categoria
+
+        except DuplicateKeyError:
+            print(f"A categoria '{nome}' já está cadastrada.")
+            return None
+
         finally:
-            db.close()
+            mongo.close()
 
     def atualizar_categoria(self) -> Categoria:
+        """Atualiza os dados de uma categoria existente."""
+
         try:
-            id_categoria = int(input("ID da categoria que deseja atualizar: ").strip())
+            id_categoria = int(
+                input("ID da categoria que deseja atualizar: ").strip()
+            )
         except ValueError:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
+        mongo = MongoQueries()
+
         try:
-            if not self.verifica_existencia_categoria(db, id_categoria):
+            mongo.connect()
+
+            collection = mongo.db["categoria"]
+
+            if not self.verifica_existencia_categoria(
+                mongo, id_categoria
+            ):
                 print(f"A categoria {id_categoria} não existe.")
                 return None
 
             nome = input("Novo nome: ").strip()
             descricao = input("Nova descrição: ").strip()
+
             if not nome or not descricao:
                 print("Nome e descrição são obrigatórios.")
                 return None
 
-            duplicada = db.fetch_one(
-                "SELECT id_categoria FROM categoria "
-                "WHERE nome = %s AND id_categoria <> %s",
-                (nome, id_categoria),
-            )
-            if duplicada:
+            # Verifica se o nome pertence a outra categoria.
+            duplicada = collection.find_one({
+                "nome": nome,
+                "id_categoria": {"$ne": id_categoria}
+            })
+
+            if duplicada is not None:
                 print(f"A categoria '{nome}' já existe.")
                 return None
 
-            row = db.execute(
-                "UPDATE categoria SET nome = %s, descricao = %s "
-                "WHERE id_categoria = %s "
-                "RETURNING id_categoria, nome, descricao",
-                (nome, descricao, id_categoria),
-                returning=True,
+            collection.update_one(
+                {"id_categoria": id_categoria},
+                {
+                    "$set": {
+                        "nome": nome,
+                        "descricao": descricao
+                    }
+                }
             )
-            categoria = self._from_row(row)
+
+            doc_atualizado = collection.find_one({
+                "id_categoria": id_categoria
+            })
+
+            categoria = self._from_doc(doc_atualizado)
+
             print("Categoria atualizada com sucesso!")
             print(categoria.to_string())
-            return categoria
-        finally:
-            db.close()
 
+            return categoria
+
+        except DuplicateKeyError:
+            print("Já existe outra categoria com esse nome.")
+            return None
+
+        finally:
+            mongo.close()
 
     def excluir_categoria(self):
+        """Exclui uma categoria, desde que não possua veículos vinculados."""
+
         try:
             id_categoria = int(
                 input("ID da categoria que deseja excluir: ").strip()
@@ -112,19 +189,20 @@ class Controller_Categoria:
             print("O ID deve ser um número inteiro.")
             return None
 
-        db = PostgresQueries()
-        try:
-            row = db.fetch_one(
-                "SELECT id_categoria, nome, descricao FROM categoria "
-                "WHERE id_categoria = %s",
-                (id_categoria,),
-            )
+        mongo = MongoQueries()
 
-            if row is None:
+        try:
+            mongo.connect()
+
+            doc = mongo.db["categoria"].find_one({
+                "id_categoria": id_categoria
+            })
+
+            if doc is None:
                 print(f"A categoria {id_categoria} não existe.")
                 return None
 
-            categoria = self._from_row(row)
+            categoria = self._from_doc(doc)
 
             print("\nCategoria selecionada:")
             print(categoria.to_string())
@@ -137,23 +215,33 @@ class Controller_Categoria:
                 print("Exclusão cancelada.")
                 return None
 
-            db.execute(
-                "DELETE FROM categoria WHERE id_categoria = %s",
-                (id_categoria,),
-            )
+            # Verifica se existem veículos vinculados à categoria.
+            veiculo_existente = mongo.db["veiculo"].find_one({
+                "id_categoria": id_categoria
+            })
 
-            print("Categoria excluída com sucesso!")
-            return categoria
-
-        except Exception as erro:
-            if "fk_veiculo_categoria" in str(erro):
+            if veiculo_existente is not None:
                 print(
                     "Não é possível excluir esta categoria, "
                     "pois existem veículos vinculados a ela."
                 )
-            else:
-                print(f"Não foi possível excluir a categoria: {erro}")
-            return None
-        finally:
-            db.close()
+                return None
 
+            resultado = mongo.db["categoria"].delete_one({
+                "id_categoria": id_categoria
+            })
+
+            if resultado.deleted_count == 0:
+                print("Não foi possível encontrar a categoria para exclusão.")
+                return None
+
+            print("Categoria excluída com sucesso!")
+
+            return categoria
+
+        except Exception as erro:
+            print(f"Não foi possível excluir a categoria: {erro}")
+            return None
+
+        finally:
+            mongo.close()
