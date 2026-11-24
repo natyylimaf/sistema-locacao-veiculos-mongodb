@@ -1,5 +1,5 @@
 import re
-from pymongo import DESCENDING
+from pymongo import ASCENDING, DESCENDING
 from model.funcionario import Funcionario
 from conexion.mongo_queries import MongoQueries
 from controller.validacao_cpf import ler_cpf
@@ -63,6 +63,40 @@ class Controller_Funcionario:
         finally:
             mongo.close()
 
+    @staticmethod
+    def _listar_funcionarios(mongo: MongoQueries) -> bool:
+        funcionarios = list(
+            mongo.db["funcionario"].find(
+                {},
+                {
+                    "_id": 0,
+                    "id_funcionario": 1,
+                    "nome": 1,
+                    "cpf": 1,
+                    "cargo": 1,
+                    "email": 1,
+                },
+            ).sort("id_funcionario", ASCENDING)
+        )
+
+        if not funcionarios:
+            print("\nNenhum funcionário cadastrado.")
+            return False
+
+        print("\n========== FUNCIONÁRIOS CADASTRADOS ==========")
+
+        for funcionario in funcionarios:
+            print(
+                f"ID: {funcionario['id_funcionario']} | "
+                f"Nome: {funcionario['nome']} | "
+                f"CPF: {funcionario['cpf']} | "
+                f"Cargo: {funcionario['cargo']} | "
+                f"E-mail: {funcionario['email']}"
+            )
+
+        print("==============================================")
+        return True
+
     def inserir_funcionario(self) -> Funcionario:
         nome = input("Nome: ").strip()
         cpf = ler_cpf("CPF: ")
@@ -109,17 +143,20 @@ class Controller_Funcionario:
             mongo.close()
 
     def atualizar_funcionario(self) -> Funcionario:
-        try:
-            id_funcionario = int(
-                input("ID do funcionário que deseja atualizar: ").strip()
-            )
-        except ValueError:
-            print("O ID deve ser um número inteiro.")
-            return None
-
         mongo = MongoQueries()
         try:
             mongo.connect()
+
+            if not self._listar_funcionarios(mongo):
+                return None
+
+            try:
+                id_funcionario = int(
+                    input("\nID do funcionário que deseja atualizar: ").strip()
+                )
+            except ValueError:
+                print("O ID deve ser um número inteiro.")
+                return None
 
             if not self.verifica_existencia_funcionario(mongo, id_funcionario):
                 print(f"O funcionário {id_funcionario} não existe.")
@@ -176,17 +213,20 @@ class Controller_Funcionario:
             mongo.close()
 
     def excluir_funcionario(self):
-        try:
-            id_funcionario = int(
-                input("ID do funcionário que deseja excluir: ").strip()
-            )
-        except ValueError:
-            print("O ID deve ser um número inteiro.")
-            return None
-
         mongo = MongoQueries()
         try:
             mongo.connect()
+
+            if not self._listar_funcionarios(mongo):
+                return None
+
+            try:
+                id_funcionario = int(
+                    input("\nID do funcionário que deseja excluir: ").strip()
+                )
+            except ValueError:
+                print("O ID deve ser um número inteiro.")
+                return None
 
             doc = mongo.db["funcionario"].find_one({"id_funcionario": id_funcionario})
             if doc is None:
@@ -213,10 +253,16 @@ class Controller_Funcionario:
                 )
                 return None
 
-            mongo.db["funcionario"].delete_one({"id_funcionario": id_funcionario})
+            resultado = mongo.db["funcionario"].delete_one(
+                {"id_funcionario": id_funcionario}
+            )
 
-            print("Funcionário excluído com sucesso!")
-            return funcionario
+            if resultado.deleted_count == 1:
+                print("Funcionário excluído com sucesso!")
+                return funcionario
+
+            print("Não foi possível excluir o funcionário.")
+            return None
 
         except Exception as erro:
             print(f"Não foi possível excluir o funcionário: {erro}")
