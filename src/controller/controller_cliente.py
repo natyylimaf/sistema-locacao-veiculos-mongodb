@@ -68,6 +68,38 @@ class Controller_Cliente:
         finally:
             mongo.close()
 
+    def _listar_clientes(self, mongo: MongoQueries):
+        """Lista os clientes cadastrados no MongoDB."""
+
+        clientes = mongo.db["cliente"].find(
+            {},
+            {
+                "_id": 0,
+                "id_cliente": 1,
+                "nome": 1,
+                "cpf": 1
+            }
+        ).sort("id_cliente", 1)
+
+        print("\n========== CLIENTES CADASTRADOS ==========")
+
+        encontrou = False
+
+        for cliente in clientes:
+            encontrou = True
+            print(
+                f"ID: {cliente['id_cliente']} | "
+                f"Nome: {cliente['nome']} | "
+                f"CPF: {cliente['cpf']}"
+            )
+
+        if not encontrou:
+            print("Nenhum cliente cadastrado.")
+
+        print("==========================================\n")
+
+        return encontrou
+
     def inserir_cliente(self) -> Cliente:
         """Cadastra um novo cliente."""
 
@@ -123,18 +155,21 @@ class Controller_Cliente:
     def atualizar_cliente(self) -> Cliente:
         """Atualiza os dados de um cliente existente."""
 
-        try:
-            id_cliente = int(
-                input("ID do cliente que deseja atualizar: ").strip()
-            )
-        except ValueError:
-            print("O ID deve ser um número inteiro.")
-            return None
-
         mongo = MongoQueries()
 
         try:
             mongo.connect()
+
+            if not self._listar_clientes(mongo):
+                return None
+
+            try:
+                id_cliente = int(
+                    input("ID do cliente que deseja atualizar: ").strip()
+                )
+            except ValueError:
+                print("O ID deve ser um número inteiro.")
+                return None
 
             if not self.verifica_existencia_cliente(mongo, id_cliente):
                 print(f"O cliente de ID {id_cliente} não existe.")
@@ -194,18 +229,21 @@ class Controller_Cliente:
     def excluir_cliente(self):
         """Exclui um cliente, desde que não possua aluguéis vinculados."""
 
-        try:
-            id_cliente = int(
-                input("ID do cliente que deseja excluir: ").strip()
-            )
-        except ValueError:
-            print("O ID deve ser um número inteiro.")
-            return None
-
         mongo = MongoQueries()
 
         try:
             mongo.connect()
+
+            if not self._listar_clientes(mongo):
+                return None
+
+            try:
+                id_cliente = int(
+                    input("ID do cliente que deseja excluir: ").strip()
+                )
+            except ValueError:
+                print("O ID deve ser um número inteiro.")
+                return None
 
             doc = mongo.db["cliente"].find_one({
                 "id_cliente": id_cliente
