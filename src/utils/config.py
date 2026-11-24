@@ -1,19 +1,19 @@
 import os
 from time import sleep
 
-# Configuração de conexão MongoDB (pode ser ajustada via variáveis de ambiente)
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "locacao_veiculos")
+# Configuração de conexão MongoDB Atlas
+MONGO_URI = os.getenv("MONGO_URI")
+MONGO_DB_NAME = os.getenv("MONGO_DATABASE", "LocacaoVeiculos")
 
-# Nomes padrão das coleções no MongoDB (confirmar com o diagrama e controllers da equipa)
+# Nomes das coleções no MongoDB Atlas
 COLECOES = {
-    "clientes": "clientes",
-    "locadoras": "locadoras",
-    "categorias": "categorias",
-    "veiculos": "veiculos",
-    "funcionarios": "funcionarios",
-    "alugueis": "alugueis",
-    "pagamentos": "pagamentos",
+    "clientes": "cliente",
+    "locadoras": "locadora",
+    "categorias": "categoria",
+    "veiculos": "veiculo",
+    "funcionarios": "funcionario",
+    "alugueis": "aluguel",
+    "pagamentos": "pagamento",
 }
 
 MENU_PRINCIPAL = """
