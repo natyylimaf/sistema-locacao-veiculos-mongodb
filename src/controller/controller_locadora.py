@@ -67,6 +67,38 @@ class Controller_Locadora:
         finally:
             mongo.close()
 
+    def _listar_locadoras(self, mongo: MongoQueries):
+        """Lista as locadoras cadastradas no MongoDB."""
+
+        locadoras = mongo.db["locadora"].find(
+            {},
+            {
+                "_id": 0,
+                "id_locadora": 1,
+                "nome": 1,
+                "cnpj": 1
+            }
+        ).sort("id_locadora", 1)
+
+        print("\n========== LOCADORAS CADASTRADAS ==========")
+
+        encontrou = False
+
+        for locadora in locadoras:
+            encontrou = True
+            print(
+                f"ID: {locadora['id_locadora']} | "
+                f"Nome: {locadora['nome']} | "
+                f"CNPJ: {locadora['cnpj']}"
+            )
+
+        if not encontrou:
+            print("Nenhuma locadora cadastrada.")
+
+        print("============================================\n")
+
+        return encontrou
+
     def inserir_locadora(self) -> Locadora:
         """Cadastra uma nova locadora."""
 
@@ -130,18 +162,21 @@ class Controller_Locadora:
     def atualizar_locadora(self) -> Locadora:
         """Atualiza os dados de uma locadora existente."""
 
-        try:
-            id_locadora = int(
-                input("ID da locadora que deseja atualizar: ").strip()
-            )
-        except ValueError:
-            print("O ID deve ser um número inteiro.")
-            return None
-
         mongo = MongoQueries()
 
         try:
             mongo.connect()
+
+            if not self._listar_locadoras(mongo):
+                return None
+
+            try:
+                id_locadora = int(
+                    input("ID da locadora que deseja atualizar: ").strip()
+                )
+            except ValueError:
+                print("O ID deve ser um número inteiro.")
+                return None
 
             collection = mongo.db["locadora"]
 
@@ -164,7 +199,6 @@ class Controller_Locadora:
                 print("O CNPJ deve possuir 14 números.")
                 return None
 
-            # Verifica se o CNPJ pertence a outra locadora.
             cnpj_em_uso = collection.find_one({
                 "cnpj": cnpj_limpo,
                 "id_locadora": {"$ne": id_locadora}
@@ -207,18 +241,21 @@ class Controller_Locadora:
     def excluir_locadora(self):
         """Exclui uma locadora, desde que não possua aluguéis vinculados."""
 
-        try:
-            id_locadora = int(
-                input("ID da locadora que deseja excluir: ").strip()
-            )
-        except ValueError:
-            print("O ID deve ser um número inteiro.")
-            return None
-
         mongo = MongoQueries()
 
         try:
             mongo.connect()
+
+            if not self._listar_locadoras(mongo):
+                return None
+
+            try:
+                id_locadora = int(
+                    input("ID da locadora que deseja excluir: ").strip()
+                )
+            except ValueError:
+                print("O ID deve ser um número inteiro.")
+                return None
 
             doc = mongo.db["locadora"].find_one({
                 "id_locadora": id_locadora
@@ -241,7 +278,6 @@ class Controller_Locadora:
                 print("Exclusão cancelada.")
                 return None
 
-            # Verifica se existem aluguéis vinculados à locadora.
             aluguel_existente = mongo.db["aluguel"].find_one({
                 "id_locadora": id_locadora
             })

@@ -59,6 +59,38 @@ class Controller_Categoria:
         finally:
             mongo.close()
 
+    def _listar_categorias(self, mongo: MongoQueries):
+        """Lista as categorias cadastradas no MongoDB."""
+
+        categorias = mongo.db["categoria"].find(
+            {},
+            {
+                "_id": 0,
+                "id_categoria": 1,
+                "nome": 1,
+                "descricao": 1
+            }
+        ).sort("id_categoria", 1)
+
+        print("\n========== CATEGORIAS CADASTRADAS ==========")
+
+        encontrou = False
+
+        for categoria in categorias:
+            encontrou = True
+            print(
+                f"ID: {categoria['id_categoria']} | "
+                f"Nome: {categoria['nome']} | "
+                f"Descrição: {categoria['descricao']}"
+            )
+
+        if not encontrou:
+            print("Nenhuma categoria cadastrada.")
+
+        print("=============================================\n")
+
+        return encontrou
+
     def inserir_categoria(self) -> Categoria:
         """Cadastra uma nova categoria."""
 
@@ -112,18 +144,21 @@ class Controller_Categoria:
     def atualizar_categoria(self) -> Categoria:
         """Atualiza os dados de uma categoria existente."""
 
-        try:
-            id_categoria = int(
-                input("ID da categoria que deseja atualizar: ").strip()
-            )
-        except ValueError:
-            print("O ID deve ser um número inteiro.")
-            return None
-
         mongo = MongoQueries()
 
         try:
             mongo.connect()
+
+            if not self._listar_categorias(mongo):
+                return None
+
+            try:
+                id_categoria = int(
+                    input("ID da categoria que deseja atualizar: ").strip()
+                )
+            except ValueError:
+                print("O ID deve ser um número inteiro.")
+                return None
 
             collection = mongo.db["categoria"]
 
@@ -140,7 +175,6 @@ class Controller_Categoria:
                 print("Nome e descrição são obrigatórios.")
                 return None
 
-            # Verifica se o nome pertence a outra categoria.
             duplicada = collection.find_one({
                 "nome": nome,
                 "id_categoria": {"$ne": id_categoria}
@@ -181,18 +215,21 @@ class Controller_Categoria:
     def excluir_categoria(self):
         """Exclui uma categoria, desde que não possua veículos vinculados."""
 
-        try:
-            id_categoria = int(
-                input("ID da categoria que deseja excluir: ").strip()
-            )
-        except ValueError:
-            print("O ID deve ser um número inteiro.")
-            return None
-
         mongo = MongoQueries()
 
         try:
             mongo.connect()
+
+            if not self._listar_categorias(mongo):
+                return None
+
+            try:
+                id_categoria = int(
+                    input("ID da categoria que deseja excluir: ").strip()
+                )
+            except ValueError:
+                print("O ID deve ser um número inteiro.")
+                return None
 
             doc = mongo.db["categoria"].find_one({
                 "id_categoria": id_categoria
@@ -215,7 +252,6 @@ class Controller_Categoria:
                 print("Exclusão cancelada.")
                 return None
 
-            # Verifica se existem veículos vinculados à categoria.
             veiculo_existente = mongo.db["veiculo"].find_one({
                 "id_categoria": id_categoria
             })
