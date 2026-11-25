@@ -26,13 +26,41 @@ class Relatorio:
         if pausar:
             input(f"\nPressione Enter para sair do relatório de {titulo.lower()}...")
 
-    def _listar_colecao(self, chave_colecao: str, titulo: str, pausar: bool = True) -> None:
+    def _listar_colecao(
+        self,
+        chave_colecao: str,
+        titulo: str,
+        pausar: bool = True
+    ) -> None:
         nome_colecao = config.COLECOES[chave_colecao]
+
+        # Define o campo de identificação de cada coleção.
+        campos_id = {
+            "clientes": "id_cliente",
+            "locadoras": "id_locadora",
+            "categorias": "id_categoria",
+            "veiculos": "id_veiculo",
+            "funcionarios": "id_funcionario",
+            "pagamentos": "id_pagamento",
+        }
+
+        campo_id = campos_id[chave_colecao]
+
+        # Não permite que a senha dos funcionários apareça no relatório.
+        projecao = {"senha": 0} if chave_colecao == "funcionarios" else None
+
         client = None
         try:
             client, db = self._conectar()
-            registros = list(db[nome_colecao].find({}))
+
+            registros = list(
+                db[nome_colecao]
+                .find({}, projecao)
+                .sort(campo_id, 1)
+            )
+
             self._exibir_documentos(titulo, registros, pausar=pausar)
+
         finally:
             if client is not None:
                 client.close()
