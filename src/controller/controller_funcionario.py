@@ -147,7 +147,8 @@ class Controller_Funcionario:
         try:
             mongo.connect()
 
-            if not self._listar_funcionarios(mongo):
+            if mongo.db["funcionario"].count_documents({}) == 0:
+                print("Nenhum funcionário cadastrado.")
                 return None
 
             try:
@@ -217,7 +218,8 @@ class Controller_Funcionario:
         try:
             mongo.connect()
 
-            if not self._listar_funcionarios(mongo):
+            if mongo.db["funcionario"].count_documents({}) == 0:
+                print("Nenhum funcionário cadastrado.")
                 return None
 
             try:

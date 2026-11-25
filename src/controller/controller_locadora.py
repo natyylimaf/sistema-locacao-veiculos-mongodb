@@ -167,7 +167,8 @@ class Controller_Locadora:
         try:
             mongo.connect()
 
-            if not self._listar_locadoras(mongo):
+            if mongo.db["locadora"].count_documents({}) == 0:
+                print("Nenhuma locadora cadastrada.")
                 return None
 
             try:
@@ -246,7 +247,8 @@ class Controller_Locadora:
         try:
             mongo.connect()
 
-            if not self._listar_locadoras(mongo):
+            if mongo.db["locadora"].count_documents({}) == 0:
+                print("Nenhuma locadora cadastrada.")
                 return None
 
             try:

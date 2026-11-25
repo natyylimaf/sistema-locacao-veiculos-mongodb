@@ -169,7 +169,8 @@ class Controller_Veiculo:
         try:
             mongo.connect()
 
-            if not self._listar_veiculos(mongo):
+            if mongo.db["veiculo"].count_documents({}) == 0:
+                print("Nenhum veículo cadastrado.")
                 return None
 
             try:
@@ -269,7 +270,8 @@ class Controller_Veiculo:
         try:
             mongo.connect()
 
-            if not self._listar_veiculos(mongo):
+            if mongo.db["veiculo"].count_documents({}) == 0:
+                print("Nenhum veículo cadastrado.")
                 return None
 
             try:

@@ -160,7 +160,8 @@ class Controller_Cliente:
         try:
             mongo.connect()
 
-            if not self._listar_clientes(mongo):
+            if mongo.db["cliente"].count_documents({}) == 0:
+                print("Nenhum cliente cadastrado.")
                 return None
 
             try:
@@ -234,7 +235,8 @@ class Controller_Cliente:
         try:
             mongo.connect()
 
-            if not self._listar_clientes(mongo):
+            if mongo.db["cliente"].count_documents({}) == 0:
+                print("Nenhum cliente cadastrado.")
                 return None
 
             try:

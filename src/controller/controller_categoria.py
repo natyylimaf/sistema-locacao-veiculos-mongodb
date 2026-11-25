@@ -149,7 +149,8 @@ class Controller_Categoria:
         try:
             mongo.connect()
 
-            if not self._listar_categorias(mongo):
+            if mongo.db["categoria"].count_documents({}) == 0:
+                print("Nenhuma categoria cadastrada.")
                 return None
 
             try:
@@ -220,7 +221,8 @@ class Controller_Categoria:
         try:
             mongo.connect()
 
-            if not self._listar_categorias(mongo):
+            if mongo.db["categoria"].count_documents({}) == 0:
+                print("Nenhuma categoria cadastrada.")
                 return None
 
             try:
