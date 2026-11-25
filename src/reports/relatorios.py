@@ -59,6 +59,13 @@ class Relatorio:
                 .sort(campo_id, 1)
             )
 
+            if chave_colecao == "pagamentos":
+                for registro in registros:
+                    data = registro.get("data_pagamento")
+
+                    if hasattr(data, "strftime"):
+                        registro["data_pagamento"] = data.strftime("%Y-%m-%d")
+                        
             self._exibir_documentos(titulo, registros, pausar=pausar)
 
         finally:
@@ -153,7 +160,39 @@ class Relatorio:
             ]
 
             resultados = list(db[col_alugueis].aggregate(pipeline))
-            self._exibir_documentos("Aluguéis", resultados)
+
+            campos = [
+                "id_aluguel",
+                "nome_cliente",
+                "nome_locadora",
+                "marca",
+                "modelo",
+                "nome_funcionario",
+                "data_retirada",
+                "data_devolucao_prevista",
+                "data_devolucao_real",
+                "valor_total",
+                "status",
+            ]
+
+            resultados_ordenados = []
+
+            for doc in resultados:
+                registro = {campo: doc.get(campo) for campo in campos}
+
+                for campo in (
+                    "data_retirada",
+                    "data_devolucao_prevista",
+                    "data_devolucao_real",
+                ):
+                    valor = registro[campo]
+
+                    if hasattr(valor, "strftime"):
+                        registro[campo] = valor.strftime("%Y-%m-%d")
+
+                resultados_ordenados.append(registro)
+
+            self._exibir_documentos("Aluguéis", resultados_ordenados)
         finally:
             if client is not None:
                 client.close()
